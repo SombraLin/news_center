@@ -539,3 +539,55 @@ POST /podcast/script
 ```text
 docs/PODCAST_SCRIPT.md
 ```
+
+
+---
+
+## 17. 新闻长文本导出
+
+推荐用于人工复制给 LLM / Podcast Script：
+
+```bash
+curl "http://localhost:8100/news/text?tag=hot&limit=20"
+```
+
+返回类型：
+
+```text
+Content-Type: text/plain
+```
+
+返回内容包含每条新闻的：
+
+- 标题
+- 来源
+- 发布时间
+- 摘要
+- 正文
+
+默认每篇正文最多输出 2500 字：
+
+```text
+max_content_chars=2500
+```
+
+可调整到最多 30000：
+
+```bash
+curl "http://localhost:8100/news/text?tag=hot&limit=20&max_content_chars=5000"
+```
+
+推荐 Podcast 调用方式：
+
+```json
+{
+  "news_text": "把 /news/text 的完整响应粘贴到这里",
+  "target_minutes": 8
+}
+```
+
+然后提交：
+
+```text
+POST /podcast/script
+```
