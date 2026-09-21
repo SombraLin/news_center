@@ -30,7 +30,9 @@ from app.database import (
     search_news,
     update_scheduler_config,
 )
+from app.domain import ArticleCandidate
 from app.main import app
+from app.providers import ProviderFetchResult, provider_registry
 
 
 @pytest.fixture(autouse=True)
@@ -261,6 +263,70 @@ def test_scheduler_config_persistence():
     assert new_cfg["interval_minutes"] == 15
     assert new_cfg["enabled"] is False
     assert new_cfg["tags"] == ["hot", "tech"]
+
+
+class ApiFakeProvider:
+    name = "api-fake"
+
+    async def fetch(self, topic: str) -> ProviderFetchResult:
+        return ProviderFetchResult(
+            articles=[
+                ArticleCandidate(
+                    title="机器人进入家庭服务新阶段",
+                    source="News Center 测试源",
+                    url=f"https://example.com/api-e2e/{topic}",
+                    published_at=parse_publish_time("2026-09-21 11:30:00"),
+                    summary="这是一条用于验证 News Center 完整接口链路的测试摘要。",
+                    content="完整正文说明家庭服务机器人正在进入真实家庭场景，并重点介绍语音交互、儿童陪伴和智能硬件协同能力。",
+                    topic=topic,
+                    provider=self.name,
+                    canonical_url=f"https://example.com/api-e2e/{topic}",
+                )
+            ],
+            stats={"fetched": 1, "valid": 1, "content_enriched": 1},
+        )
+
+
+def test_fetch_to_retrieval_api_end_to_end():
+    provider_registry.register(ApiFakeProvider())
+    client = TestClient(app)
+
+    fetch_response = client.post(
+        "/fetch",
+        json={
+            "tag": "tech",
+            "limit_per_tag": 5,
+            "provider": "api-fake",
+        },
+    )
+    assert fetch_response.status_code == 200
+    fetch_data = fetch_response.json()
+    assert fetch_data["success"] is True
+    assert fetch_data["status"] == "success"
+    assert fetch_data["total_added"] == 1
+
+    list_response = client.get("/news?tag=tech")
+    assert list_response.status_code == 200
+    list_data = list_response.json()
+    assert list_data["total"] == 1
+    item = list_data["items"][0]
+    assert item["provider"] == "api-fake"
+    assert "家庭服务机器人" in item["content"]
+    article_id = item["id"]
+
+    search_response = client.get("/news/search", params={"q": "儿童陪伴", "tag": "tech"})
+    assert search_response.status_code == 200
+    search_data = search_response.json()
+    assert search_data["total"] == 1
+    assert search_data["items"][0]["id"] == article_id
+    assert "relevance" in search_data["items"][0]
+
+    detail_response = client.get(f"/news/{article_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["id"] == article_id
+    assert detail["title"] == "机器人进入家庭服务新阶段"
+    assert "语音交互" in detail["content"]
 
 
 def test_api_routes():
