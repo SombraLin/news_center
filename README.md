@@ -202,3 +202,58 @@ PYTHONPATH=. python -m pytest -q
 ```
 
 GitHub Actions 会在 PR 更新后自动执行同一测试集。
+
+
+## 健康检查与管理鉴权
+
+公开健康检查：
+
+```text
+GET /health/live
+GET /health/ready
+```
+
+Provider 发现：
+
+```text
+GET /providers
+```
+
+生产环境建议设置：
+
+```dotenv
+NEWS_CENTER_ADMIN_API_KEY=replace-with-a-long-random-secret
+```
+
+设置后，以下管理接口必须携带：
+
+```http
+X-API-Key: replace-with-a-long-random-secret
+```
+
+受保护接口：
+
+- `POST /fetch`
+- `GET /scheduler/status`
+- `POST /scheduler/config`
+- `POST /scheduler/run`
+
+未设置 `NEWS_CENTER_ADMIN_API_KEY` 时保持本地开发兼容模式，不要求 Key。
+
+## Provider 扩展
+
+默认 Provider：
+
+```dotenv
+NEWS_CENTER_DEFAULT_PROVIDER=zaker
+```
+
+Scheduler 配置可以持久化指定 Provider，`POST /fetch` 也可按请求选择 Provider。
+
+新增数据源开发指南：
+
+**[docs/PROVIDER_GUIDE.md](docs/PROVIDER_GUIDE.md)**
+
+完整 API 与鉴权说明：
+
+**[docs/API_USAGE.md](docs/API_USAGE.md)**
