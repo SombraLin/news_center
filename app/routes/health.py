@@ -24,7 +24,7 @@ def health_live() -> dict[str, Any]:
 
 
 @router.get("/health/ready", summary="Readiness 探针")
-def health_ready() -> dict[str, Any] | JSONResponse:
+def health_ready():
     """Check local dependencies required to serve API traffic."""
     checks: dict[str, Any] = {}
     ready = True
