@@ -38,7 +38,11 @@ def canonicalize_url(url: str) -> str:
     if not scheme or not hostname:
         return raw
 
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        return raw
+
     if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
         netloc = f"{hostname}:{port}"
     else:
