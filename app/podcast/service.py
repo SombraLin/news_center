@@ -9,6 +9,7 @@ from app.podcast.prompt import (
     HOST_1_PROFILE,
     HOST_2_PROFILE,
     SYSTEM_PROMPT,
+    build_text_user_prompt,
     build_user_prompt,
 )
 
@@ -192,6 +193,46 @@ class PodcastScriptService:
             raise PodcastInputError("新闻条目缺少有效 title，无法生成播客文案")
 
         return selected, received_count
+
+    async def generate_from_text(
+        self,
+        news_text: str,
+        *,
+        target_minutes: int = 8,
+        episode_title: str | None = None,
+    ) -> PodcastScriptResult:
+        cleaned = str(news_text or "").strip()
+        if len(cleaned) < 20:
+            raise PodcastInputError("news_text 内容太短，无法生成播客文案")
+
+        max_total_chars = self.max_articles * (self.max_article_chars + 600)
+        if len(cleaned) > max_total_chars:
+            cleaned = cleaned[:max_total_chars].rstrip() + "…"
+
+        titles = [
+            line.split("：", 1)[1].strip()
+            for line in cleaned.splitlines()
+            if line.startswith("标题：") and "：" in line
+        ]
+        selected_count = min(len(titles), self.max_articles) if titles else 0
+
+        completion = await self._client.complete(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=build_text_user_prompt(
+                cleaned,
+                target_minutes=target_minutes,
+                episode_title=episode_title,
+            ),
+        )
+        return PodcastScriptResult(
+            script=_finalize_script(completion.content),
+            model=completion.model,
+            received_count=len(titles),
+            selected_count=selected_count,
+            source_titles=titles[: self.max_articles],
+            usage=completion.usage,
+            request_id=completion.request_id,
+        )
 
     async def generate(
         self,
