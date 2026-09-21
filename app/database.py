@@ -4,7 +4,10 @@ import contextlib
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-import sqlite3
+try:
+    import pysqlite3 as sqlite3
+except ImportError:
+    import sqlite3
 from typing import Any, Generator
 from uuid import uuid4
 
