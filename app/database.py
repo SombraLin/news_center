@@ -286,6 +286,10 @@ def init_db() -> None:
             db.execute(
                 "ALTER TABLE scheduler_config ADD COLUMN provider TEXT NOT NULL DEFAULT 'zaker'"
             )
+            db.execute(
+                "UPDATE scheduler_config SET provider = ?",
+                (settings.default_provider,),
+            )
 
         _migrate_legacy_news(db)
         _rebuild_fts(db)
