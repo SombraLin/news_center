@@ -25,7 +25,7 @@ def get_scheduler_status() -> dict[str, Any]:
 
 
 @router.post("/scheduler/config", summary="更新定时调度配置")
-def update_config(body: SchedulerConfigUpdate) -> dict[str, Any]:
+async def update_config(body: SchedulerConfigUpdate) -> dict[str, Any]:
     """
     修改定时调度参数（热更新生效，持久化存入数据库）。
     - 支持启停调度
