@@ -3,9 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 
 from app.crawler import normalize_tag
 from app.database import get_news_by_id, query_news, search_news
+from app.services.news_text import render_news_text
 
 router = APIRouter()
 
@@ -44,6 +46,48 @@ def get_news_list(
         "count": len(items),
         "items": items,
     }
+
+
+@router.get(
+    "/news/text",
+    response_class=PlainTextResponse,
+    summary="获取可直接复制给 LLM 的新闻长文本",
+)
+def get_news_text(
+    tag: str | None = Query("hot", description="主题分类，默认 hot"),
+    keyword: str | None = Query(None, description="可选全文关键词过滤"),
+    limit: int = Query(20, ge=1, le=50, description="新闻数量，默认 20"),
+    offset: int = Query(0, ge=0),
+    max_content_chars: int = Query(
+        2500,
+        ge=500,
+        le=30000,
+        description="每篇正文最多输出字符数，默认 2500",
+    ),
+) -> PlainTextResponse:
+    """按时间倒序返回纯文本新闻集合，不返回 JSON。"""
+    clean_tag = None
+    if tag:
+        try:
+            clean_tag = normalize_tag(tag)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    items, _ = query_news(
+        tag=clean_tag,
+        keyword=keyword,
+        limit=limit,
+        offset=offset,
+    )
+    text = render_news_text(
+        items,
+        tag=clean_tag,
+        max_content_chars=max_content_chars,
+    )
+    return PlainTextResponse(
+        content=text,
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @router.get("/news/search", summary="全文搜索新闻")
