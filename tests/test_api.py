@@ -27,6 +27,7 @@ from app.database import (
     insert_news_batch,
     insert_news_candidate,
     query_news,
+    search_news,
     update_scheduler_config,
 )
 from app.main import app
@@ -148,6 +149,55 @@ def test_database_insert_and_deduplication():
 
 
 
+def test_fts_search_supports_chinese_source_and_tag_filter():
+    tech = Candidate(
+        title="深圳人工智能产业大会开幕",
+        source="科技日报",
+        url="https://example.com/fts/tech",
+        published_at=parse_publish_time("2026-09-21 10:10:00"),
+        summary="大会聚焦人工智能、大模型和机器人产业发展。",
+        tag="tech",
+    )
+    finance = Candidate(
+        title="人工智能企业融资提速",
+        source="财经周刊",
+        url="https://example.com/fts/finance",
+        published_at=parse_publish_time("2026-09-21 10:20:00"),
+        summary="资本市场持续关注人工智能企业融资进展。",
+        tag="finance",
+    )
+    insert_news_batch([tech, finance])
+
+    items, total = search_news("人工智能")
+    assert total == 2
+    assert len(items) == 2
+    assert all("relevance" in item for item in items)
+
+    source_items, source_total = search_news("科技日报")
+    assert source_total == 1
+    assert source_items[0]["title"] == "深圳人工智能产业大会开幕"
+
+    tech_items, tech_total = search_news("人工智能", tag="tech")
+    assert tech_total == 1
+    assert tech_items[0]["tag"] == "tech"
+
+
+def test_news_keyword_query_uses_fts_index():
+    candidate = Candidate(
+        title="新能源汽车电池技术突破",
+        source="产业观察",
+        url="https://example.com/fts/auto",
+        published_at=parse_publish_time("2026-09-21 10:40:00"),
+        summary="新型固态电池技术推动新能源汽车续航提升。",
+        tag="auto",
+    )
+    insert_news_candidate(candidate)
+
+    items, total = query_news(keyword="固态电池")
+    assert total == 1
+    assert items[0]["title"] == "新能源汽车电池技术突破"
+
+
 def test_legacy_news_migration_is_idempotent():
     with connection() as db:
         db.execute(
@@ -250,11 +300,18 @@ def test_api_routes():
     assert res_single.status_code == 200
     assert res_single.json()["title"] == "科技前沿快讯"
 
-    # 5. 测试 GET /scheduler/status
+    # 5. 测试 GET /news/search
+    res_search = client.get("/news/search?q=科技前沿")
+    assert res_search.status_code == 200
+    search_data = res_search.json()
+    assert search_data["total"] >= 1
+    assert search_data["items"][0]["title"] == "科技前沿快讯"
+
+    # 6. 测试 GET /scheduler/status
     res_status = client.get("/scheduler/status")
     assert res_status.status_code == 200
 
-    # 6. 测试 POST /scheduler/config
+    # 7. 测试 POST /scheduler/config
     res_update = client.post("/scheduler/config", json={"interval_minutes": 20, "tags": ["china", "world"]})
     assert res_update.status_code == 200
     assert res_update.json()["config"]["interval_minutes"] == 20
