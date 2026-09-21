@@ -41,7 +41,8 @@ curl http://localhost:8100/
   "docs_url": "/docs",
   "topics_url": "/topics",
   "news_url": "/news",
-  "search_url": "/news/search?q=关键词"
+  "search_url": "/news/search?q=关键词",
+  "podcast_script_url": "/podcast/script"
 }
 ```
 
@@ -431,6 +432,7 @@ X-API-Key: replace-with-a-long-random-secret
 - `GET /scheduler/status`
 - `POST /scheduler/config`
 - `POST /scheduler/run`
+- `POST /podcast/script`
 
 示例：
 
@@ -517,4 +519,23 @@ NEWS_CENTER_DEFAULT_PROVIDER=zaker
 
 ```text
 docs/PROVIDER_GUIDE.md
+```
+
+
+---
+
+## 16. 独立播客文案模块
+
+将手工粘贴的新闻 JSON 使用 Qwen-Plus 整理成双主播播客文案：
+
+```text
+POST /podcast/script
+```
+
+该接口不会自动读取数据库或触发新闻抓取，也不会调用音频生成模型。
+
+详细使用方法：
+
+```text
+docs/PODCAST_SCRIPT.md
 ```
