@@ -143,6 +143,53 @@ def _migrate_legacy_news(db: sqlite3.Connection) -> None:
             _upsert_topic(db, article_id, row["tag"])
 
 
+def _fts_query(value: str) -> str:
+    """Escape user input as a literal FTS5 phrase."""
+    cleaned = " ".join((value or "").strip().split())
+    return '"' + cleaned.replace('"', '""') + '"'
+
+
+def _sync_fts_article(db: sqlite3.Connection, article_id: str) -> None:
+    row = db.execute(
+        """
+        SELECT id, title, summary, source, content
+        FROM articles
+        WHERE id = ?
+        """,
+        (article_id,),
+    ).fetchone()
+    if not row:
+        db.execute("DELETE FROM articles_fts WHERE article_id = ?", (article_id,))
+        return
+
+    db.execute("DELETE FROM articles_fts WHERE article_id = ?", (article_id,))
+    db.execute(
+        """
+        INSERT INTO articles_fts (article_id, title, summary, source, content)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            row["id"],
+            row["title"] or "",
+            row["summary"] or "",
+            row["source"] or "",
+            row["content"] or "",
+        ),
+    )
+
+
+def _rebuild_fts(db: sqlite3.Connection) -> None:
+    """Reconcile the FTS index from authoritative article rows."""
+    db.execute("DELETE FROM articles_fts")
+    db.execute(
+        """
+        INSERT INTO articles_fts (article_id, title, summary, source, content)
+        SELECT id, title, COALESCE(summary, ''), COALESCE(source, ''), COALESCE(content, '')
+        FROM articles
+        """
+    )
+
+
 def init_db() -> None:
     with connection() as db:
         db.executescript(
@@ -200,6 +247,15 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_article_topics_topic
                 ON article_topics(topic);
 
+            CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
+                article_id UNINDEXED,
+                title,
+                summary,
+                source,
+                content,
+                tokenize = 'trigram'
+            );
+
             CREATE TABLE IF NOT EXISTS scheduler_config (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 enabled INTEGER NOT NULL DEFAULT 1,
@@ -214,6 +270,7 @@ def init_db() -> None:
         )
 
         _migrate_legacy_news(db)
+        _rebuild_fts(db)
 
         row = db.execute("SELECT id FROM scheduler_config WHERE id = 1").fetchone()
         if not row:
@@ -269,6 +326,7 @@ def _insert_article(
                 existing_id,
             ),
         )
+        _sync_fts_article(db, existing_id)
         return False, existing_id
 
     article_id = uuid4().hex
@@ -320,6 +378,7 @@ def _insert_article(
             now,
         ),
     )
+    _sync_fts_article(db, article_id)
     return True, article_id
 
 
@@ -397,9 +456,10 @@ def query_news(
         params.append(tag)
 
     if keyword:
-        where_clauses.append("(a.title LIKE ? OR a.summary LIKE ? OR a.source LIKE ?)")
-        kw = f"%{keyword.strip()}%"
-        params.extend([kw, kw, kw])
+        where_clauses.append(
+            "EXISTS (SELECT 1 FROM articles_fts f WHERE f.article_id = a.id AND articles_fts MATCH ?)"
+        )
+        params.append(_fts_query(keyword))
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
@@ -433,6 +493,74 @@ def query_news(
         ).fetchall()
 
     return [_row_to_news_item(row, tag) for row in rows], total
+
+
+def search_news(
+    query: str,
+    tag: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """Full-text search using SQLite FTS5, ranked by BM25 relevance."""
+    fts_query = _fts_query(query)
+    where_tag = ""
+    params: list[Any] = [fts_query]
+
+    if tag:
+        where_tag = """
+            AND EXISTS (
+                SELECT 1 FROM article_topics tf
+                WHERE tf.article_id = a.id AND tf.topic = ?
+            )
+        """
+        params.append(tag)
+
+    with connection() as db:
+        total = db.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM articles_fts f
+            JOIN articles a ON a.id = f.article_id
+            WHERE articles_fts MATCH ?
+            {where_tag}
+            """,
+            params,
+        ).fetchone()["total"]
+
+        rows = db.execute(
+            f"""
+            SELECT
+                a.id, a.provider, a.canonical_url, a.url, a.title, a.source,
+                a.summary, a.content, a.image_url, a.language,
+                a.published_at, a.fetched_at, a.updated_at,
+                bm25(articles_fts, 8.0, 3.0, 1.5, 1.0, 2.0) AS relevance,
+                snippet(articles_fts, 2, '<mark>', '</mark>', '…', 18) AS match_snippet,
+                (
+                    SELECT GROUP_CONCAT(topic, ',')
+                    FROM (
+                        SELECT topic
+                        FROM article_topics t
+                        WHERE t.article_id = a.id
+                        ORDER BY topic
+                    )
+                ) AS topics_csv
+            FROM articles_fts f
+            JOIN articles a ON a.id = f.article_id
+            WHERE articles_fts MATCH ?
+            {where_tag}
+            ORDER BY relevance ASC, a.published_at DESC, a.fetched_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+
+    items = []
+    for row in rows:
+        item = _row_to_news_item(row, tag)
+        item["relevance"] = float(row["relevance"])
+        item["match_snippet"] = row["match_snippet"]
+        items.append(item)
+    return items, total
 
 
 def get_news_by_id(news_id: str) -> dict[str, Any] | None:
@@ -478,6 +606,23 @@ def cleanup_old_news(days: int) -> int:
         return 0
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with connection() as db:
+        stale_ids = [
+            row["id"]
+            for row in db.execute(
+                """
+                SELECT id FROM articles
+                WHERE published_at < ?
+                   OR (published_at IS NULL AND fetched_at < ?)
+                """,
+                (cutoff, cutoff),
+            ).fetchall()
+        ]
+        if stale_ids:
+            db.executemany(
+                "DELETE FROM articles_fts WHERE article_id = ?",
+                [(article_id,) for article_id in stale_ids],
+            )
+
         cursor = db.execute(
             """
             DELETE FROM articles
