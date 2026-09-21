@@ -1,21 +1,23 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.crawler import normalize_tag
 from app.database import update_scheduler_config
+from app.providers import provider_registry
 from app.scheduler import news_scheduler
+from app.security import require_admin_api_key
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_api_key)])
 
 
 class SchedulerConfigUpdate(BaseModel):
     enabled: bool | None = Field(None, description="是否启用定时抓取")
     interval_minutes: int | None = Field(None, ge=1, le=1440, description="抓取轮询间隔（分钟），范围 1-1440")
     tags: list[str] | None = Field(None, description="定时抓取的目标主题列表，如 ['hot', 'tech', 'finance']")
+    provider: str | None = Field(None, description="定时抓取使用的 Provider 名称")
 
 
 @router.get("/scheduler/status", summary="查看定时调度器状态")
@@ -43,11 +45,20 @@ async def update_config(body: SchedulerConfigUpdate) -> dict[str, Any]:
         if not cleaned_tags:
             raise HTTPException(status_code=400, detail="主题列表不能为空")
 
+    clean_provider = None
+    if body.provider is not None:
+        clean_provider = body.provider.strip()
+        try:
+            provider_registry.get(clean_provider)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # 更新数据库配置
     new_cfg = update_scheduler_config(
         enabled=body.enabled,
         interval_minutes=body.interval_minutes,
         tags=cleaned_tags,
+        provider=clean_provider,
     )
 
     # 同步动态调整运行中的调度器
