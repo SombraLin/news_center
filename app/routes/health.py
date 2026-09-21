@@ -33,8 +33,8 @@ def health_ready():
         db_status = check_database_readiness()
         checks["database"] = db_status
         ready = ready and bool(db_status.get("ready"))
-    except Exception as exc:
-        checks["database"] = {"ready": False, "error": str(exc)}
+    except Exception:
+        checks["database"] = {"ready": False, "error": "database_unavailable"}
         ready = False
 
     providers = provider_registry.names()
