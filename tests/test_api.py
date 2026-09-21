@@ -387,6 +387,45 @@ def test_fetch_to_retrieval_api_end_to_end():
     assert "语音交互" in detail["content"]
 
 
+def test_news_text_endpoint_returns_copyable_plain_text():
+    with_content = ArticleCandidate(
+        title="热点正文测试",
+        source="测试新闻源",
+        url="https://example.com/text/hot-1",
+        published_at=parse_publish_time("2026-09-21 11:40:00"),
+        summary="这是热点正文测试摘要。",
+        content="这是可以直接复制给大模型的完整新闻正文内容。",
+        topic="hot",
+        provider="api-fake",
+    )
+    summary_only = ArticleCandidate(
+        title="仅摘要测试",
+        source="测试新闻源",
+        url="https://example.com/text/hot-2",
+        published_at=parse_publish_time("2026-09-21 11:30:00"),
+        summary="这篇新闻只有摘要，没有抓取到完整正文。",
+        content=None,
+        topic="hot",
+        provider="api-fake",
+    )
+    insert_news_batch([with_content, summary_only])
+
+    client = TestClient(app)
+    response = client.get("/news/text?tag=hot&limit=20")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    text = response.text
+    assert "新闻主题：hot" in text
+    assert "新闻数量：2" in text
+    assert "【新闻 1】" in text
+    assert "标题：热点正文测试" in text
+    assert "这是可以直接复制给大模型的完整新闻正文内容。" in text
+    assert "标题：仅摘要测试" in text
+    assert "未抓取到完整正文，请以摘要信息为准。" in text
+    assert '"items"' not in text
+
+
 def test_health_and_provider_discovery_endpoints():
     client = TestClient(app)
 
