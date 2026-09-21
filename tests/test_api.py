@@ -112,15 +112,33 @@ def test_database_insert_and_deduplication():
     assert added == 2
     assert skipped == 0
 
-    # 再次插入相同的 cand1，应该被唯一键去重忽略
+    # 再次插入相同的 cand1，应该被去重忽略
     added2, skipped2 = insert_news_batch([cand1])
     assert added2 == 0
     assert skipped2 == 1
+
+    # 同一 URL 的新闻可以追加新的 topic，而不会重复创建 article
+    cand1_finance = Candidate(
+        title="测试新闻1",
+        source="新华社",
+        url="https://example.com/news/1?utm_source=test",
+        published_at=parse_publish_time("2026-09-21 10:00:00"),
+        summary="这是测试新闻的摘要内容1",
+        tag="finance",
+    )
+    added3, skipped3 = insert_news_batch([cand1_finance])
+    assert added3 == 0
+    assert skipped3 == 1
 
     # 查询验证
     items, total = query_news(tag="tech")
     assert total == 1
     assert items[0]["title"] == "测试新闻1"
+    assert set(items[0]["topics"]) == {"tech", "finance"}
+
+    finance_items, finance_total = query_news(tag="finance")
+    assert finance_total == 2
+    assert any(item["title"] == "测试新闻1" for item in finance_items)
 
     # 关键字模糊查询验证
     items_kw, total_kw = query_news(keyword="央视网")
