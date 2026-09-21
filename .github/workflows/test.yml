@@ -26,5 +26,6 @@ jobs:
 
       - name: Run tests
         env:
+          PYTHONPATH: .
           NEWS_CENTER_SCHEDULER_AUTOSTART: "false"
-        run: pytest -q
+        run: python -m pytest -q
