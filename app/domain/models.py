@@ -42,6 +42,7 @@ class TopicIngestionResult:
     valid: int = 0
     added: int = 0
     duplicate_history: int = 0
+    provider_stats: dict[str, int] = field(default_factory=dict)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
