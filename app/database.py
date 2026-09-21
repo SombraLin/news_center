@@ -9,7 +9,6 @@ from typing import Any, Generator
 from uuid import uuid4
 
 from app.config import settings
-from app.crawler import Candidate
 
 
 def utc_now_iso() -> str:
@@ -86,7 +85,7 @@ def init_db() -> None:
             )
 
 
-def insert_news_candidate(candidate: Candidate) -> bool:
+def insert_news_candidate(candidate: Any) -> bool:
     """插入单条候选新闻，若 url 重复则忽略并返回 False，插入成功返回 True"""
     now = utc_now_iso()
     pub = candidate.published_at.isoformat() if candidate.published_at else None
@@ -102,16 +101,36 @@ def insert_news_candidate(candidate: Candidate) -> bool:
         return cursor.rowcount > 0
 
 
-def insert_news_batch(candidates: list[Candidate]) -> tuple[int, int]:
-    """批量插入新闻，返回 (新增数量, 重复跳过数量)"""
+def insert_news_batch(candidates: list[Any]) -> tuple[int, int]:
+    """批量插入新闻，使用单事务写入，返回 (新增数量, 重复跳过数量)。"""
+    if not candidates:
+        return 0, 0
+
+    now = utc_now_iso()
     added = 0
-    skipped = 0
-    for cand in candidates:
-        if insert_news_candidate(cand):
-            added += 1
-        else:
-            skipped += 1
-    return added, skipped
+
+    with connection() as db:
+        for candidate in candidates:
+            pub = candidate.published_at.isoformat() if candidate.published_at else None
+            cursor = db.execute(
+                """
+                INSERT OR IGNORE INTO news (id, tag, title, source, url, summary, published_at, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid4().hex,
+                    candidate.tag,
+                    candidate.title,
+                    candidate.source,
+                    candidate.url,
+                    candidate.summary,
+                    pub,
+                    now,
+                ),
+            )
+            added += max(cursor.rowcount, 0)
+
+    return added, len(candidates) - added
 
 
 def query_news(
