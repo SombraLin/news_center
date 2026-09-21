@@ -416,7 +416,6 @@ def test_scheduler_api_can_select_registered_provider():
         "/scheduler/config",
         json={
             "provider": "api-fake",
-            "interval_minutes": 25,
             "tags": ["tech"],
         },
     )
