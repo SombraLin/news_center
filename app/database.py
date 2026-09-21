@@ -42,7 +42,8 @@ def connection() -> Generator[sqlite3.Connection, None, None]:
 
 
 def _article_identity(candidate: Any) -> tuple[str, str]:
-    canonical_url = getattr(candidate, "canonical_url", None) or canonicalize_url(candidate.url)
+    identity_url = getattr(candidate, "canonical_url", None) or candidate.url
+    canonical_url = canonicalize_url(identity_url)
     content_hash = build_content_hash(candidate.title, candidate.summary)
     return canonical_url, content_hash
 
