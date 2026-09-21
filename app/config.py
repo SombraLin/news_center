@@ -34,6 +34,10 @@ class Settings:
     fetch_interval_minutes: int = int(os.getenv("NEWS_CENTER_FETCH_INTERVAL_MINUTES", "30"))
     scheduler_autostart: bool = _get_bool("NEWS_CENTER_SCHEDULER_AUTOSTART", True)
     cleanup_days: int = int(os.getenv("NEWS_CENTER_CLEANUP_DAYS", "7"))
+    content_fetch_enabled: bool = _get_bool("NEWS_CENTER_CONTENT_FETCH_ENABLED", True)
+    content_fetch_timeout_seconds: float = float(os.getenv("NEWS_CENTER_CONTENT_FETCH_TIMEOUT_SECONDS", "8.0"))
+    content_fetch_concurrency: int = int(os.getenv("NEWS_CENTER_CONTENT_FETCH_CONCURRENCY", "4"))
+    content_max_chars: int = int(os.getenv("NEWS_CENTER_CONTENT_MAX_CHARS", "30000"))
 
 
 settings = Settings()
