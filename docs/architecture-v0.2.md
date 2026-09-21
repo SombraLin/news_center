@@ -271,3 +271,61 @@ After this retrieval foundation:
 7. removal of the V0.1 shadow table after the rollback window
 
 PostgreSQL, Redis, Celery and Elasticsearch are intentionally not required for V0.2.
+
+
+## 13. Article body enrichment
+
+V0.2 performs best-effort article-body enrichment before persistence.
+
+Boundary:
+
+- article list metadata still comes from the Provider source API,
+- body extraction is implemented in `app/providers/content.py`,
+- the current implementation does **not** extract or persist images,
+- body extraction failure is non-fatal.
+
+Extraction order:
+
+1. JSON-LD `articleBody`,
+2. paragraph-based HTML fallback,
+3. normalize HTML entities / Unicode / whitespace,
+4. cap stored text by `NEWS_CENTER_CONTENT_MAX_CHARS`.
+
+Runtime controls:
+
+- `NEWS_CENTER_CONTENT_FETCH_ENABLED`
+- `NEWS_CENTER_CONTENT_FETCH_TIMEOUT_SECONDS`
+- `NEWS_CENTER_CONTENT_FETCH_CONCURRENCY`
+- `NEWS_CENTER_CONTENT_MAX_CHARS`
+
+Provider statistics expose:
+
+- `content_attempted`
+- `content_enriched`
+- `content_failed`
+
+When richer content is later added to an existing article, the article row and FTS index are updated together.
+
+## 14. API verification contract
+
+CI includes an end-to-end API contract test using an in-memory fake Provider and the real FastAPI routes / SQLite repository:
+
+```text
+POST /fetch
+    ↓
+GET /news
+    ↓
+GET /news/search
+    ↓
+GET /news/{id}
+```
+
+The test verifies that:
+
+- ingestion succeeds,
+- Provider statistics are returned,
+- body content is persisted,
+- body-only keywords are searchable through FTS5,
+- the same article is returned through list/search/detail APIs.
+
+See `docs/API_USAGE.md` for operator and caller instructions.
