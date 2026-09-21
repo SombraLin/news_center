@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
-
-import pytest
 
 from app.domain import ArticleCandidate
 from app.providers import ProviderFetchResult, provider_registry
@@ -38,37 +37,41 @@ class FakeRepository:
         return len(articles), 0
 
 
-@pytest.mark.asyncio
-async def test_ingestion_service_is_provider_independent():
-    provider_registry.register(FakeProvider())
-    repository = FakeRepository()
-    service = IngestionService(repository=repository)
+def test_ingestion_service_is_provider_independent():
+    async def scenario() -> None:
+        provider_registry.register(FakeProvider())
+        repository = FakeRepository()
+        service = IngestionService(repository=repository)
 
-    result = await service.ingest_topics(
-        ["tech", "finance"],
-        provider_name="fake",
-        concurrency=2,
-    )
+        result = await service.ingest_topics(
+            ["tech", "finance"],
+            provider_name="fake",
+            concurrency=2,
+        )
 
-    assert result.status == "success"
-    assert result.total_added == 2
-    assert result.total_skipped == 0
-    assert set(result.details) == {"tech", "finance"}
-    assert {article.provider for article in repository.saved} == {"fake"}
+        assert result.status == "success"
+        assert result.total_added == 2
+        assert result.total_skipped == 0
+        assert set(result.details) == {"tech", "finance"}
+        assert {article.provider for article in repository.saved} == {"fake"}
+
+    asyncio.run(scenario())
 
 
-@pytest.mark.asyncio
-async def test_ingestion_service_deduplicates_requested_topics():
-    provider_registry.register(FakeProvider())
-    repository = FakeRepository()
-    service = IngestionService(repository=repository)
+def test_ingestion_service_deduplicates_requested_topics():
+    async def scenario() -> None:
+        provider_registry.register(FakeProvider())
+        repository = FakeRepository()
+        service = IngestionService(repository=repository)
 
-    result = await service.ingest_topics(
-        ["tech", "tech", "technology"],
-        provider_name="fake",
-    )
+        result = await service.ingest_topics(
+            ["tech", "tech", "technology"],
+            provider_name="fake",
+        )
 
-    assert result.status == "success"
-    assert result.total_added == 1
-    assert len(repository.saved) == 1
-    assert repository.saved[0].topic == "tech"
+        assert result.status == "success"
+        assert result.total_added == 1
+        assert len(repository.saved) == 1
+        assert repository.saved[0].topic == "tech"
+
+    asyncio.run(scenario())
