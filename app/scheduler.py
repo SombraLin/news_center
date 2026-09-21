@@ -28,9 +28,10 @@ async def fetch_news_job() -> dict[str, Any]:
         return {"status": "skipped", "reason": "scheduler_disabled"}
 
     tags = cfg.get("tags") or settings.default_tags
-    logger.info("开始执行定时新闻抓取，目标主题列表: %s", tags)
+    provider = cfg.get("provider") or settings.default_provider
+    logger.info("开始执行定时新闻抓取，Provider=%s，目标主题列表: %s", provider, tags)
 
-    result = await ingestion_service.ingest_topics(tags)
+    result = await ingestion_service.ingest_topics(tags, provider_name=provider)
     run_result = result.to_dict()
 
     cleaned_count = 0
@@ -133,6 +134,7 @@ class NewsScheduler:
             "job_enabled": cfg["enabled"],
             "interval_minutes": cfg["interval_minutes"],
             "configured_tags": cfg["tags"],
+            "configured_provider": cfg["provider"],
             "next_run_time": next_run_time,
             "last_run_at": cfg["last_run_at"],
             "last_status": cfg["last_status"],
