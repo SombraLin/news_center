@@ -4,6 +4,7 @@ from app.config import settings
 from app.crawler import fetch_zaker
 from app.domain import ArticleCandidate
 from app.providers.base import ProviderFetchResult
+from app.providers.content import enrich_articles_with_content
 
 
 class ZakerProvider:
@@ -34,4 +35,14 @@ class ZakerProvider:
             )
             for item in candidates
         ]
+
+        if settings.content_fetch_enabled and articles:
+            content_stats = await enrich_articles_with_content(
+                articles,
+                timeout=settings.content_fetch_timeout_seconds,
+                concurrency=settings.content_fetch_concurrency,
+                max_chars=settings.content_max_chars,
+            )
+            stats.update(content_stats)
+
         return ProviderFetchResult(articles=articles, stats=stats)
