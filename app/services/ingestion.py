@@ -42,10 +42,10 @@ class IngestionService:
                     try:
                         fetched = await provider.fetch(topic)
                         articles = fetched.articles
-                        if limit_per_topic is not None:
-                            articles = articles[: max(0, limit_per_topic)]
-
-                        added, skipped = self._repository.insert_batch(articles)
+                        added, skipped = self._repository.insert_batch(
+                            articles,
+                            max_added=limit_per_topic,
+                        )
                         result = TopicIngestionResult(
                             topic=topic,
                             provider=provider.name,
