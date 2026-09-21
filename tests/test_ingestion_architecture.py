@@ -32,9 +32,15 @@ class FakeRepository:
     def __init__(self) -> None:
         self.saved: list[ArticleCandidate] = []
 
-    def insert_batch(self, articles: list[ArticleCandidate]) -> tuple[int, int]:
-        self.saved.extend(articles)
-        return len(articles), 0
+    def insert_batch(
+        self,
+        articles: list[ArticleCandidate],
+        *,
+        max_added: int | None = None,
+    ) -> tuple[int, int]:
+        selected = articles if max_added is None else articles[:max_added]
+        self.saved.extend(selected)
+        return len(selected), 0
 
 
 def test_ingestion_service_is_provider_independent():
