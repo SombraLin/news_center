@@ -9,9 +9,9 @@
 ```text
 News Center 新闻抓取
         ↓
-GET /news?tag=hot&limit=20
+GET /news/text?tag=hot&limit=20
         ↓
-手工复制 JSON
+手工复制长文本
         ↓
 POST /podcast/script
         ↓
@@ -30,7 +30,9 @@ Podcast Script 模块：
 - 不调用 `/fetch`；
 - 不依赖 crawler / repository / scheduler；
 - 不自动调用豆包音频接口；
-- 只负责 **JSON → Qwen-Plus → 播客文案**。
+- 只负责 **手工新闻输入 → Qwen-Plus → 播客文案**。
+
+推荐优先使用纯文本流程；JSON 输入继续保留用于兼容。
 
 因此未来可以独立替换新闻源、LLM 或音频模型。
 
@@ -70,17 +72,49 @@ NEWS_CENTER_QWEN_API_KEY=sk-your-api-key
 
 <https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions>
 
-## 3. 推荐操作：先准备 hot 最新 20 条
+## 3. 推荐操作：直接获取 hot 最新 20 条长文本
 
 先确保热点新闻已经存在于 News Center。
 
-查询：
+推荐查询：
+
+```bash
+curl "http://localhost:8100/news/text?tag=hot&limit=20&offset=0"
+```
+
+该接口返回 `text/plain`，不是 JSON，内容类似：
+
+```text
+新闻主题：hot
+新闻数量：20
+
+【新闻 1】
+标题：……
+来源：……
+发布时间：……
+摘要：……
+正文：
+……
+
+----------------------------------------
+
+【新闻 2】
+……
+```
+
+默认每篇正文最多输出 2500 字，可调整：
+
+```bash
+curl "http://localhost:8100/news/text?tag=hot&limit=20&max_content_chars=5000"
+```
+
+如果仍需要 JSON，原接口继续可用：
 
 ```bash
 curl "http://localhost:8100/news?tag=hot&limit=20&offset=0"
 ```
 
-它会返回类似：
+JSON 会返回类似：
 
 ```json
 {
@@ -103,7 +137,9 @@ curl "http://localhost:8100/news?tag=hot&limit=20&offset=0"
 }
 ```
 
-直接复制整个返回对象即可，不需要自己只截取 `items`。
+对于推荐的纯文本流程，直接复制 `/news/text` 的整个响应即可。
+
+对于 JSON 流程，仍可复制整个返回对象，不需要自己只截取 `items`。
 
 ## 4. 调用播客文案接口
 
@@ -121,7 +157,17 @@ http://localhost:8100/docs
 
 找到 **播客文案 → POST /podcast/script**。
 
-请求：
+推荐的纯文本请求：
+
+```json
+{
+  "news_text": "新闻主题：hot\n新闻数量：20\n\n【新闻 1】\n标题：……\n来源：……\n摘要：……\n正文：\n……",
+  "target_minutes": 8,
+  "episode_title": null
+}
+```
+
+兼容的 JSON 请求：
 
 ```json
 {
@@ -146,11 +192,12 @@ http://localhost:8100/docs
 }
 ```
 
-其中 `news` 支持三种输入：
+输入方式二选一：
 
-1. 直接粘贴 `GET /news` 的完整返回对象；
-2. 直接传文章数组；
-3. 传上述两种形式对应的 JSON 字符串。
+- `news_text`：推荐，直接粘贴 `GET /news/text` 的长文本；
+- `news`：兼容模式，可粘贴 `GET /news` 的完整返回对象、文章数组或对应 JSON 字符串。
+
+`news` 与 `news_text` 不能同时提供。
 
 如果传入超过 20 条，模块会按照：
 
