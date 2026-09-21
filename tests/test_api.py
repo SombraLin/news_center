@@ -19,6 +19,7 @@ from app.crawler import (
 )
 from app.database import (
     cleanup_old_news,
+    connection,
     get_db_path,
     get_news_by_id,
     get_scheduler_config,
@@ -144,6 +145,61 @@ def test_database_insert_and_deduplication():
     items_kw, total_kw = query_news(keyword="央视网")
     assert total_kw == 1
     assert items_kw[0]["source"] == "央视网"
+
+
+
+def test_legacy_news_migration_is_idempotent():
+    with connection() as db:
+        db.execute(
+            """
+            INSERT INTO news (id, tag, title, source, url, summary, published_at, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-1",
+                "world",
+                "旧版新闻迁移测试",
+                "旧版来源",
+                "https://example.com/legacy/1?utm_source=old",
+                "这是一条用于验证旧版 news 表迁移的新闻摘要。",
+                "2026-09-21T02:00:00+00:00",
+                "2026-09-21T02:05:00+00:00",
+            ),
+        )
+
+    init_db()
+    first_items, first_total = query_news(tag="world")
+    assert first_total == 1
+    assert first_items[0]["id"] == "legacy-1"
+    assert first_items[0]["canonical_url"] == "https://example.com/legacy/1"
+
+    # Re-running initialization must not duplicate migrated articles/topics.
+    init_db()
+    second_items, second_total = query_news(tag="world")
+    assert second_total == 1
+    assert second_items[0]["id"] == "legacy-1"
+
+
+def test_v02_insert_shadow_writes_legacy_news_table():
+    candidate = Candidate(
+        title="回滚兼容测试",
+        source="测试来源",
+        url="https://example.com/rollback/1",
+        published_at=parse_publish_time("2026-09-21 11:20:00"),
+        summary="这是一条用于验证 V0.1 回滚兼容影子写入的新闻摘要。",
+        tag="tech",
+    )
+    assert insert_news_candidate(candidate) is True
+
+    with connection() as db:
+        row = db.execute(
+            "SELECT tag, title FROM news WHERE url = ?",
+            (candidate.url,),
+        ).fetchone()
+
+    assert row is not None
+    assert row["tag"] == "tech"
+    assert row["title"] == "回滚兼容测试"
 
 
 def test_scheduler_config_persistence():
