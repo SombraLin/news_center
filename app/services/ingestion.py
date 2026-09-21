@@ -5,13 +5,9 @@ from collections.abc import Iterable
 
 from app.crawler import normalize_tag
 from app.domain import IngestionResult, TopicIngestionResult
-from app.providers import ZakerProvider, provider_registry
+from app.config import settings
+from app.providers import provider_registry
 from app.repositories import NewsRepository, news_repository
-
-# Default registration lives at the application composition boundary.
-if "zaker" not in provider_registry.names():
-    provider_registry.register(ZakerProvider())
-
 
 class IngestionService:
     """Coordinates provider fetches and persistence.
@@ -28,11 +24,11 @@ class IngestionService:
         self,
         topics: Iterable[str],
         *,
-        provider_name: str = "zaker",
+        provider_name: str | None = None,
         limit_per_topic: int | None = None,
         concurrency: int = 4,
     ) -> IngestionResult:
-        provider = provider_registry.get(provider_name)
+        provider = provider_registry.get(provider_name or settings.default_provider)
         cleaned_topics = list(dict.fromkeys(normalize_tag(topic) for topic in topics))
         semaphore = asyncio.Semaphore(max(1, concurrency))
 
