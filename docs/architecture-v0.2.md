@@ -224,16 +224,50 @@ The branch includes tests covering:
 - multi-topic article association,
 - existing V0.1 API behavior.
 
-## 12. Next phases
+## 12. Full-text retrieval
 
-After this schema foundation:
+V0.2 now includes SQLite FTS5 retrieval through an `articles_fts` virtual table.
 
-1. SQLite FTS5 search
-2. richer article body/image extraction
-3. improved ingestion result identity reporting
-4. admin authentication for mutation endpoints
-5. health/readiness/metrics
-6. additional providers (RSS and curated sources)
+Indexed fields:
+
+- title
+- summary
+- source
+- content
+
+The FTS index uses the `trigram` tokenizer so Chinese continuous-text queries such as `人工智能`, `新能源汽车`, or `深圳` can match naturally without requiring external Chinese segmentation services.
+
+Index lifecycle:
+
+1. startup rebuild from authoritative `articles`,
+2. new article insertion sync,
+3. richer-field backfill sync,
+4. expired article cleanup sync.
+
+Existing `GET /news?keyword=...` remains compatible but now uses FTS5 internally.
+
+A dedicated endpoint is also available:
+
+`GET /news/search?q=...&tag=...`
+
+It uses BM25 ranking and returns:
+
+- `relevance`
+- `match_snippet`
+- normal article metadata and topics.
+
+This gives upper-layer AI applications a relevance-oriented retrieval API while preserving the chronological list API.
+
+## 13. Next phases
+
+After this retrieval foundation:
+
+1. richer article body/image extraction
+2. improved ingestion result identity reporting
+3. admin authentication for mutation endpoints
+4. health/readiness/metrics
+5. additional providers (RSS and curated sources)
+6. search query normalization / synonyms if real usage requires it
 7. removal of the V0.1 shadow table after the rollback window
 
 PostgreSQL, Redis, Celery and Elasticsearch are intentionally not required for V0.2.
