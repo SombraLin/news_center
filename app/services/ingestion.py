@@ -53,6 +53,7 @@ class IngestionService:
                             valid=fetched.stats.get("valid", len(fetched.articles)),
                             added=added,
                             duplicate_history=skipped,
+                            provider_stats=dict(fetched.stats),
                         )
                         sample = [item.to_dict() for item in articles[: min(added, 10)]]
                         return topic, result, sample
