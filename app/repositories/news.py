@@ -7,7 +7,12 @@ from app.database import insert_news_batch
 
 
 class NewsRepository(Protocol):
-    def insert_batch(self, articles: list[ArticleCandidate]) -> tuple[int, int]:
+    def insert_batch(
+        self,
+        articles: list[ArticleCandidate],
+        *,
+        max_added: int | None = None,
+    ) -> tuple[int, int]:
         ...
 
 
@@ -18,8 +23,13 @@ class SqliteNewsRepository:
     implementation without changing the ingestion service.
     """
 
-    def insert_batch(self, articles: list[ArticleCandidate]) -> tuple[int, int]:
-        return insert_news_batch(articles)
+    def insert_batch(
+        self,
+        articles: list[ArticleCandidate],
+        *,
+        max_added: int | None = None,
+    ) -> tuple[int, int]:
+        return insert_news_batch(articles, max_added=max_added)
 
 
 news_repository = SqliteNewsRepository()
