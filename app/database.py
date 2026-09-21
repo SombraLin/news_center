@@ -164,6 +164,9 @@ def init_db() -> None:
                 ON articles(canonical_url);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_content_hash
                 ON articles(content_hash);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_provider_source_id
+                ON articles(provider, source_article_id)
+                WHERE source_article_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_articles_published_at
                 ON articles(published_at DESC);
             CREATE INDEX IF NOT EXISTS idx_articles_fetched_at
@@ -273,6 +276,26 @@ def _insert_article(
         ),
     )
     _upsert_topic(db, article_id, candidate.tag)
+
+    # V0.1 compatibility shadow write. This keeps rollback possible while
+    # articles/article_topics are the authoritative V0.2 schema.
+    db.execute(
+        """
+        INSERT OR IGNORE INTO news (
+            id, tag, title, source, url, summary, published_at, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            article_id,
+            candidate.tag,
+            candidate.title,
+            candidate.source,
+            candidate.url,
+            candidate.summary,
+            published_at,
+            now,
+        ),
+    )
     return True, article_id
 
 
@@ -439,7 +462,16 @@ def cleanup_old_news(days: int) -> int:
             """,
             (cutoff, cutoff),
         )
-        return cursor.rowcount
+        deleted = cursor.rowcount
+        db.execute(
+            """
+            DELETE FROM news
+            WHERE published_at < ?
+               OR (published_at IS NULL AND fetched_at < ?)
+            """,
+            (cutoff, cutoff),
+        )
+        return deleted
 
 
 def get_scheduler_config() -> dict[str, Any]:
