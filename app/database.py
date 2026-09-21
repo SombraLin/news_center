@@ -143,10 +143,19 @@ def _migrate_legacy_news(db: sqlite3.Connection) -> None:
             _upsert_topic(db, article_id, row["tag"])
 
 
+def _clean_search_query(value: str) -> str:
+    return " ".join((value or "").strip().split())
+
+
 def _fts_query(value: str) -> str:
     """Escape user input as a literal FTS5 phrase."""
-    cleaned = " ".join((value or "").strip().split())
+    cleaned = _clean_search_query(value)
     return '"' + cleaned.replace('"', '""') + '"'
+
+
+def _use_fts(value: str) -> bool:
+    """Trigram search becomes useful at three or more visible characters."""
+    return len(_clean_search_query(value)) >= 3
 
 
 def _sync_fts_article(db: sqlite3.Connection, article_id: str) -> None:
@@ -456,10 +465,17 @@ def query_news(
         params.append(tag)
 
     if keyword:
-        where_clauses.append(
-            "EXISTS (SELECT 1 FROM articles_fts f WHERE f.article_id = a.id AND articles_fts MATCH ?)"
-        )
-        params.append(_fts_query(keyword))
+        if _use_fts(keyword):
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM articles_fts f WHERE f.article_id = a.id AND articles_fts MATCH ?)"
+            )
+            params.append(_fts_query(keyword))
+        else:
+            where_clauses.append(
+                "(a.title LIKE ? OR a.summary LIKE ? OR a.source LIKE ? OR a.content LIKE ?)"
+            )
+            short_query = f"%{_clean_search_query(keyword)}%"
+            params.extend([short_query, short_query, short_query, short_query])
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
@@ -501,8 +517,38 @@ def search_news(
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Full-text search using SQLite FTS5, ranked by BM25 relevance."""
-    fts_query = _fts_query(query)
+    """Search articles.
+
+    Queries with three or more characters use FTS5/BM25. Shorter queries fall
+    back to LIKE because the trigram tokenizer cannot reliably match them.
+    """
+    cleaned_query = _clean_search_query(query)
+    if not cleaned_query:
+        return [], 0
+
+    if not _use_fts(cleaned_query):
+        items, total = query_news(
+            tag=tag,
+            keyword=cleaned_query,
+            limit=limit,
+            offset=offset,
+        )
+        for item in items:
+            item["relevance"] = None
+            text = " ".join(
+                str(value or "")
+                for value in (item["title"], item["summary"], item["source"], item["content"])
+            )
+            index = text.casefold().find(cleaned_query.casefold())
+            if index >= 0:
+                start_at = max(0, index - 30)
+                end_at = min(len(text), index + len(cleaned_query) + 50)
+                item["match_snippet"] = text[start_at:end_at]
+            else:
+                item["match_snippet"] = item["summary"] or item["title"]
+        return items, total
+
+    fts_query = _fts_query(cleaned_query)
     where_tag = ""
     params: list[Any] = [fts_query]
 
@@ -534,7 +580,7 @@ def search_news(
                 a.summary, a.content, a.image_url, a.language,
                 a.published_at, a.fetched_at, a.updated_at,
                 bm25(articles_fts, 8.0, 3.0, 1.5, 1.0, 2.0) AS relevance,
-                snippet(articles_fts, 2, '<mark>', '</mark>', '…', 18) AS match_snippet,
+                snippet(articles_fts, -1, '<mark>', '</mark>', '…', 18) AS match_snippet,
                 (
                     SELECT GROUP_CONCAT(topic, ',')
                     FROM (
