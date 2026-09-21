@@ -68,3 +68,37 @@ def build_user_prompt(
 新闻材料：
 {json.dumps(articles, ensure_ascii=False, indent=2)}
 """
+
+
+def build_text_user_prompt(
+    news_text: str,
+    *,
+    target_minutes: int,
+    episode_title: str | None = None,
+) -> str:
+    target_chars = target_minutes * 240
+    title_instruction = (
+        f"本期主题可以围绕“{episode_title}”组织，但不要为了贴合标题而扭曲新闻重点。"
+        if episode_title
+        else "请自行从新闻材料中提炼本期主线，不需要单独输出节目标题。"
+    )
+
+    return f"""请把下面的新闻长文本整理成一段双人中文新闻播客文案。
+
+{title_instruction}
+
+目标时长约 {target_minutes} 分钟，建议正文约 {max(600, int(target_chars * 0.8))} 到 {int(target_chars * 1.2)} 个中文字符。
+如果材料不足以支撑目标时长，宁可缩短，也不要编造或灌水。
+
+编辑方法：
+- 先在内部判断哪些报道属于同一事件，再合并。
+- 从最值得开场的热点进入，再自然切到其他主题。
+- 不要求把所有新闻逐条讲完，但重要事实不能因追求戏剧性而被改写。
+- 对同一主题可让主播 1 先讲事实，主播 2 用一句追问或补充带出下一层信息。
+- 人名、机构名、数字、日期等尽量保持原始材料准确。
+- 不要说“根据我提供的文本”“第 X 条新闻”之类的后台语言。
+- 结尾用 2-4 句自然收束，不做宏大空泛总结。
+
+新闻材料：
+{news_text}
+"""
