@@ -272,6 +272,39 @@ def test_v02_insert_shadow_writes_legacy_news_table():
     assert row["title"] == "回滚兼容测试"
 
 
+def test_legacy_scheduler_config_migrates_provider_column():
+    with connection() as db:
+        db.execute("DROP TABLE scheduler_config")
+        db.execute(
+            """
+            CREATE TABLE scheduler_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 1,
+                interval_minutes INTEGER NOT NULL DEFAULT 30,
+                tags_json TEXT NOT NULL,
+                last_run_at TEXT,
+                last_status TEXT,
+                last_result_json TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO scheduler_config (
+                id, enabled, interval_minutes, tags_json, updated_at
+            ) VALUES (1, 0, 45, '["hot", "tech"]', '2026-09-21T00:00:00+00:00')
+            """
+        )
+
+    init_db()
+    cfg = get_scheduler_config()
+    assert cfg["enabled"] is False
+    assert cfg["interval_minutes"] == 45
+    assert cfg["tags"] == ["hot", "tech"]
+    assert cfg["provider"] == "zaker"
+
+
 def test_scheduler_config_persistence():
     cfg = get_scheduler_config()
     assert cfg["interval_minutes"] == 30
