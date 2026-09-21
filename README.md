@@ -37,7 +37,8 @@ V0.2 额外提供一个**完全独立的 Podcast Script 模块**：仅接受人�
 - BM25 相关性排序
 - V0.1 `news` shadow table，支持回滚兼容
 - GitHub Actions 自动运行 pytest
-- 独立 `POST /podcast/script`：手工新闻 JSON → Qwen-Plus → 双主播播客文案
+- `GET /news/text`：直接输出标题/摘要/正文组成的新闻长文本
+- 独立 `POST /podcast/script`：手工新闻 JSON 或长文本 → Qwen-Plus → 双主播播客文案
 
 ## 快速开始
 
@@ -98,6 +99,7 @@ curl --get "http://localhost:8100/news/search" \
 | POST | `/fetch` | 手动抓取并入库 |
 | GET | `/news` | 按时间分页查询；兼容 keyword 搜索 |
 | GET | `/news/search` | FTS5 + BM25 全文检索 |
+| GET | `/news/text` | 返回适合直接复制给 LLM 的新闻长文本 |
 | GET | `/news/{id}` | 单篇详情 |
 | GET | `/scheduler/status` | Scheduler 状态 |
 | POST | `/scheduler/config` | 更新 Scheduler 配置 |
