@@ -329,3 +329,62 @@ The test verifies that:
 - the same article is returned through list/search/detail APIs.
 
 See `docs/API_USAGE.md` for operator and caller instructions.
+
+
+## 15. Operational hardening
+
+V0.2 exposes two health endpoints:
+
+```text
+GET /health/live
+GET /health/ready
+```
+
+`/health/live` only reports process liveness.
+
+`/health/ready` verifies:
+
+- SQLite is queryable,
+- required V0.2 tables/indexes exist,
+- the configured default Provider is registered.
+
+Readiness intentionally does not call upstream news sources, so a temporary source outage does not make the process fail orchestration health checks.
+
+### Admin API authentication
+
+`NEWS_CENTER_ADMIN_API_KEY` is optional.
+
+When empty, V0.2 preserves local/backward-compatible behavior.
+
+When configured, management endpoints require `X-API-Key`:
+
+- `POST /fetch`
+- all `/scheduler/*` routes
+
+Read-only content, health and discovery APIs remain public.
+
+The comparison uses constant-time secret comparison.
+
+## 16. Provider runtime selection
+
+Provider selection is now part of runtime configuration.
+
+Discovery:
+
+```text
+GET /providers
+```
+
+Manual ingestion may specify a Provider per request.
+
+Scheduler configuration persists a Provider name in SQLite and uses it on every run.
+
+Legacy databases without the `scheduler_config.provider` column are upgraded automatically during `init_db()`.
+
+The default provider comes from:
+
+```dotenv
+NEWS_CENTER_DEFAULT_PROVIDER=zaker
+```
+
+Provider implementation guidance is documented in `docs/PROVIDER_GUIDE.md`.
