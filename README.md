@@ -1,39 +1,40 @@
-# News Center
+# News Center V0.2
 
-轻量级、可嵌入的新闻采集与全文检索服务。
+轻量、独立的 **News Content & Retrieval Hub**。
 
-当前 V0.2 的定位是 **News Content & Retrieval Hub**：
+News Center 负责：
 
 ```text
-News Provider
-     ↓
-IngestionService
-     ↓
-去重 / 多主题归档
-     ↓
-SQLite articles
-     ├── article_topics
-     └── FTS5 全文索引
-              ↓
-       REST Retrieval API
+抓取
+  ↓
+正文提取
+  ↓
+规范化
+  ↓
+去重
+  ↓
+多主题关联
+  ↓
+SQLite 持久化
+  ↓
+FTS5 全文检索
 ```
 
-News Center 专注于：
+不负责 LLM 改写、儿童化表达、推荐策略或 TTS，这些能力应由上层服务完成。
 
-- 新闻采集
-- 正文 best-effort 提取
-- canonical URL / content hash 去重
-- 一篇文章关联多个 topic
-- SQLite 持久化
-- FTS5 中文全文检索
-- APScheduler 定时采集
+## 当前能力
 
-明确不负责：
-
-- LLM 改写
-- 个性化推荐
-- TTS
-- 图片抓取
+- 10 个预设新闻主题
+- Provider 抽象，当前默认 ZAKER
+- 手动抓取与定时抓取统一经过 `IngestionService`
+- 正文页面 best-effort 提取，不抓取图片
+- `provider + source_article_id` / canonical URL / content hash 三层去重
+- 一篇文章可关联多个 topic
+- SQLite 单事务批量写入
+- SQLite FTS5 + trigram 中文全文检索
+- BM25 相关性排序
+- V0.1 `news` shadow table，支持回滚兼容
+- GitHub Actions 自动运行 pytest
 
 ## 快速开始
 
@@ -41,91 +42,158 @@ News Center 专注于：
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 python -m app.main
 ```
 
 默认地址：
 
 ```text
-http://127.0.0.1:8100
+http://localhost:8100
 ```
 
-Swagger：
+OpenAPI：
 
 ```text
-http://127.0.0.1:8100/docs
+http://localhost:8100/docs
 ```
 
-## 最常用接口
+完整调用说明：
 
-```text
-GET  /topics
-POST /fetch
-GET  /news
-GET  /news/search?q=人工智能
-GET  /news/{id}
+**[docs/API_USAGE.md](docs/API_USAGE.md)**
 
-GET  /scheduler/status
-POST /scheduler/config
-POST /scheduler/run
-```
+架构说明：
 
-最简单的使用流程：
+**[docs/architecture-v0.2.md](docs/architecture-v0.2.md)**
+
+## 最短验证流程
 
 ```bash
-curl -X POST http://127.0.0.1:8100/fetch \
+curl http://localhost:8100/
+curl http://localhost:8100/topics
+
+curl -X POST http://localhost:8100/fetch \
   -H "Content-Type: application/json" \
-  -d '{"tag":"tech","limit_per_tag":10}'
+  -d '{"tag":"tech","limit_per_tag":3}'
 
-curl "http://127.0.0.1:8100/news?tag=tech"
+curl "http://localhost:8100/news?tag=tech&limit=3"
 
-curl --get http://127.0.0.1:8100/news/search \
+curl --get "http://localhost:8100/news/search" \
   --data-urlencode "q=人工智能"
 ```
 
-## 文档
+## API
 
-- [完整 API 使用说明](docs/api-usage.md)
-- [V0.2 架构说明](docs/architecture-v0.2.md)
+| Method | Path | 用途 |
+|---|---|---|
+| GET | `/` | 服务状态 |
+| GET | `/topics` | 获取主题及文章数量 |
+| POST | `/fetch` | 手动抓取并入库 |
+| GET | `/news` | 按时间分页查询；兼容 keyword 搜索 |
+| GET | `/news/search` | FTS5 + BM25 全文检索 |
+| GET | `/news/{id}` | 单篇详情 |
+| GET | `/scheduler/status` | Scheduler 状态 |
+| POST | `/scheduler/config` | 更新 Scheduler 配置 |
+| POST | `/scheduler/run` | 立即执行一轮定时任务 |
 
-## 数据模型
+## 主题
 
-主要表：
+`hot`, `china`, `world`, `military`, `finance`, `internet`, `tech`, `auto`, `sports`, `entertainment`
 
-```text
-articles
-article_topics
-articles_fts
-scheduler_config
-```
+## 正文提取
 
-V0.1 的 `news` 表暂时保留作为回滚兼容 shadow table。
+默认开启：
 
-文章身份识别依次利用：
-
-1. `provider + source_article_id`
-2. canonical URL
-3. title + summary content hash
-
-## 正文
-
-默认会尝试抓取文章详情页正文：
-
-```bash
+```dotenv
 NEWS_CENTER_CONTENT_FETCH_ENABLED=true
 NEWS_CENTER_CONTENT_FETCH_TIMEOUT_SECONDS=8
 NEWS_CENTER_CONTENT_FETCH_CONCURRENCY=4
 NEWS_CENTER_CONTENT_MAX_CHARS=30000
 ```
 
-正文抓取失败不会导致新闻抓取失败。
+提取策略：
 
-此时：
+1. 优先 JSON-LD `articleBody`
+2. 回退到有效正文段落
+3. HTML 转为纯文本
+4. 页面抓取失败时保留 summary，不让整条新闻失败
 
-- title 正常保存
-- summary 正常保存
-- content 可能为 null
-- 仍然可以通过标题/摘要搜索
+项目当前**不抓取图片**。
+
+`POST /fetch` 的 `provider_stats` 可查看正文抓取结果：
+
+```json
+{
+  "content_attempted": 15,
+  "content_enriched": 11,
+  "content_failed": 4
+}
+```
+
+## 搜索
+
+推荐 AI / 玩偶上层服务使用：
+
+```bash
+curl --get "http://localhost:8100/news/search" \
+  --data-urlencode "q=机器人 人工智能" \
+  --data-urlencode "tag=tech" \
+  --data-urlencode "limit=5"
+```
+
+搜索索引覆盖：
+
+- title
+- summary
+- source
+- content
+
+搜索结果按 BM25 相关性排序。
+
+## 数据模型
+
+```text
+articles
+   │
+   ├──── article_topics
+   │
+   ├──── articles_fts
+   │
+   └──── legacy news shadow table
+```
+
+## 项目结构
+
+```text
+app/
+├── domain/
+│   ├── models.py
+│   └── identity.py
+├── providers/
+│   ├── base.py
+│   ├── registry.py
+│   ├── zaker.py
+│   └── content.py
+├── repositories/
+│   └── news.py
+├── services/
+│   └── ingestion.py
+├── crawler/
+│   └── zaker.py
+├── routes/
+│   ├── fetch.py
+│   ├── news.py
+│   ├── topics.py
+│   └── scheduler_route.py
+├── database.py
+├── scheduler.py
+├── config.py
+└── main.py
+
+docs/
+├── API_USAGE.md
+└── architecture-v0.2.md
+```
 
 ## 测试
 
@@ -133,17 +201,4 @@ NEWS_CENTER_CONTENT_MAX_CHARS=30000
 PYTHONPATH=. python -m pytest -q
 ```
 
-GitHub Actions 会在 PR 更新时自动执行测试。
-
-测试包含真实 FastAPI 路由的端到端链路：
-
-```text
-POST /fetch
-  → GET /news
-  → GET /news/search
-  → GET /news/{id}
-```
-
-## 当前主题
-
-`hot`, `china`, `world`, `military`, `finance`, `internet`, `tech`, `auto`, `sports`, `entertainment`.
+GitHub Actions 会在 PR 更新后自动执行同一测试集。
