@@ -33,6 +33,7 @@ from app.database import (
 from app.domain import ArticleCandidate
 from app.main import app
 from app.providers import ProviderFetchResult, provider_registry
+import app.security as security_module
 
 
 @pytest.fixture(autouse=True)
@@ -274,8 +275,14 @@ def test_v02_insert_shadow_writes_legacy_news_table():
 def test_scheduler_config_persistence():
     cfg = get_scheduler_config()
     assert cfg["interval_minutes"] == 30
+    assert cfg["provider"] == "zaker"
 
-    update_scheduler_config(interval_minutes=15, enabled=False, tags=["hot", "tech"])
+    update_scheduler_config(
+        interval_minutes=15,
+        enabled=False,
+        tags=["hot", "tech"],
+        provider="zaker",
+    )
     new_cfg = get_scheduler_config()
     assert new_cfg["interval_minutes"] == 15
     assert new_cfg["enabled"] is False
@@ -345,6 +352,84 @@ def test_fetch_to_retrieval_api_end_to_end():
     assert detail["id"] == article_id
     assert detail["title"] == "机器人进入家庭服务新阶段"
     assert "语音交互" in detail["content"]
+
+
+def test_health_and_provider_discovery_endpoints():
+    client = TestClient(app)
+
+    live = client.get("/health/live")
+    assert live.status_code == 200
+    assert live.json()["status"] == "alive"
+
+    ready = client.get("/health/ready")
+    assert ready.status_code == 200
+    ready_data = ready.json()
+    assert ready_data["status"] == "ready"
+    assert ready_data["checks"]["database"]["ready"] is True
+    assert "zaker" in ready_data["checks"]["providers"]["registered"]
+
+    providers = client.get("/providers")
+    assert providers.status_code == 200
+    provider_data = providers.json()
+    assert provider_data["default_provider"] == "zaker"
+    zaker = next(item for item in provider_data["providers"] if item["name"] == "zaker")
+    assert zaker["supports_content"] is True
+    assert "tech" in zaker["supported_topics"]
+
+
+def test_admin_api_key_protects_management_endpoints(monkeypatch):
+    provider_registry.register(ApiFakeProvider())
+    monkeypatch.setattr(
+        security_module,
+        "settings",
+        type("SecuritySettings", (), {"admin_api_key": "test-secret"})(),
+    )
+    client = TestClient(app)
+
+    # Public read APIs stay public.
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/news").status_code == 200
+    assert client.get("/providers").status_code == 200
+
+    # Management APIs require a key once configured.
+    assert client.post("/fetch", json={"tag": "tech", "provider": "api-fake"}).status_code == 401
+    assert client.get("/scheduler/status").status_code == 401
+
+    headers = {"X-API-Key": "test-secret"}
+    fetch = client.post(
+        "/fetch",
+        json={"tag": "tech", "provider": "api-fake", "limit_per_tag": 1},
+        headers=headers,
+    )
+    assert fetch.status_code == 200
+    assert fetch.json()["success"] is True
+
+    status = client.get("/scheduler/status", headers=headers)
+    assert status.status_code == 200
+
+
+def test_scheduler_api_can_select_registered_provider():
+    provider_registry.register(ApiFakeProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/scheduler/config",
+        json={
+            "provider": "api-fake",
+            "interval_minutes": 25,
+            "tags": ["tech"],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["config"]["provider"] == "api-fake"
+    assert data["scheduler_status"]["configured_provider"] == "api-fake"
+
+    invalid = client.post(
+        "/scheduler/config",
+        json={"provider": "missing-provider"},
+    )
+    assert invalid.status_code == 400
 
 
 def test_api_routes():
