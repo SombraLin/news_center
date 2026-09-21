@@ -101,16 +101,27 @@ def insert_news_candidate(candidate: Any) -> bool:
         return cursor.rowcount > 0
 
 
-def insert_news_batch(candidates: list[Any]) -> tuple[int, int]:
-    """批量插入新闻，使用单事务写入，返回 (新增数量, 重复跳过数量)。"""
+def insert_news_batch(
+    candidates: list[Any],
+    max_added: int | None = None,
+) -> tuple[int, int]:
+    """批量插入新闻，单事务写入。
+
+    max_added 限制本轮成功新增数量；历史重复会继续跳过并检查后续候选，
+    以保持 V0.1 limit_per_tag 的语义。
+    """
     if not candidates:
         return 0, 0
 
     now = utc_now_iso()
     added = 0
+    skipped = 0
 
     with connection() as db:
         for candidate in candidates:
+            if max_added is not None and added >= max_added:
+                break
+
             pub = candidate.published_at.isoformat() if candidate.published_at else None
             cursor = db.execute(
                 """
@@ -128,9 +139,12 @@ def insert_news_batch(candidates: list[Any]) -> tuple[int, int]:
                     now,
                 ),
             )
-            added += max(cursor.rowcount, 0)
+            if cursor.rowcount > 0:
+                added += 1
+            else:
+                skipped += 1
 
-    return added, len(candidates) - added
+    return added, skipped
 
 
 def query_news(
