@@ -40,6 +40,18 @@ class Settings:
     content_fetch_timeout_seconds: float = float(os.getenv("NEWS_CENTER_CONTENT_FETCH_TIMEOUT_SECONDS", "8.0"))
     content_fetch_concurrency: int = int(os.getenv("NEWS_CENTER_CONTENT_FETCH_CONCURRENCY", "4"))
     content_max_chars: int = int(os.getenv("NEWS_CENTER_CONTENT_MAX_CHARS", "30000"))
+    qwen_api_key: str = (
+        os.getenv("NEWS_CENTER_QWEN_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+        or ""
+    ).strip()
+    qwen_base_url: str = os.getenv(
+        "NEWS_CENTER_QWEN_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ).strip()
+    qwen_timeout_seconds: float = float(os.getenv("NEWS_CENTER_QWEN_TIMEOUT_SECONDS", "90"))
+    podcast_max_articles: int = int(os.getenv("NEWS_CENTER_PODCAST_MAX_ARTICLES", "20"))
+    podcast_max_article_chars: int = int(os.getenv("NEWS_CENTER_PODCAST_MAX_ARTICLE_CHARS", "2500"))
 
 
 settings = Settings()
