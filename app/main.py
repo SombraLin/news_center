@@ -67,6 +67,7 @@ def index() -> dict[str, str]:
         "topics_url": "/topics",
         "news_url": "/news",
         "search_url": "/news/search?q=关键词",
+        "podcast_script_url": "/podcast/script",
         "providers_url": "/providers",
         "liveness_url": "/health/live",
         "readiness_url": "/health/ready",
