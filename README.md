@@ -20,7 +20,9 @@ SQLite 持久化
 FTS5 全文检索
 ```
 
-不负责 LLM 改写、儿童化表达、推荐策略或 TTS，这些能力应由上层服务完成。
+新闻采集核心层不负责 LLM 改写、儿童化表达、推荐策略或 TTS。
+
+V0.2 额外提供一个**完全独立的 Podcast Script 模块**：仅接受人工粘贴的新闻 JSON，调用 Qwen-Plus 整理为双主播播客文案；它不会自动触发新闻抓取，也不会自动调用音频生成服务。
 
 ## 当前能力
 
@@ -35,6 +37,7 @@ FTS5 全文检索
 - BM25 相关性排序
 - V0.1 `news` shadow table，支持回滚兼容
 - GitHub Actions 自动运行 pytest
+- 独立 `POST /podcast/script`：手工新闻 JSON → Qwen-Plus → 双主播播客文案
 
 ## 快速开始
 
@@ -66,6 +69,10 @@ http://localhost:8100/docs
 
 **[docs/architecture-v0.2.md](docs/architecture-v0.2.md)**
 
+Podcast Script 使用说明：
+
+**[docs/PODCAST_SCRIPT.md](docs/PODCAST_SCRIPT.md)**
+
 ## 最短验证流程
 
 ```bash
@@ -95,6 +102,7 @@ curl --get "http://localhost:8100/news/search" \
 | GET | `/scheduler/status` | Scheduler 状态 |
 | POST | `/scheduler/config` | 更新 Scheduler 配置 |
 | POST | `/scheduler/run` | 立即执行一轮定时任务 |
+| POST | `/podcast/script` | 将手工粘贴的新闻 JSON 整理为 Qwen-Plus 双主播播客文案 |
 
 ## 主题
 
@@ -174,6 +182,11 @@ app/
 │   ├── registry.py
 │   ├── zaker.py
 │   └── content.py
+├── podcast/
+│   ├── prompt.py
+│   ├── qwen.py
+│   ├── models.py
+│   └── service.py
 ├── repositories/
 │   └── news.py
 ├── services/
@@ -184,6 +197,7 @@ app/
 │   ├── fetch.py
 │   ├── news.py
 │   ├── topics.py
+│   ├── podcast.py
 │   └── scheduler_route.py
 ├── database.py
 ├── scheduler.py
@@ -237,6 +251,7 @@ X-API-Key: replace-with-a-long-random-secret
 - `GET /scheduler/status`
 - `POST /scheduler/config`
 - `POST /scheduler/run`
+- `POST /podcast/script`
 
 未设置 `NEWS_CENTER_ADMIN_API_KEY` 时保持本地开发兼容模式，不要求 Key。
 
