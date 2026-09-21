@@ -51,16 +51,31 @@ def _find_existing_article_id(
     db: sqlite3.Connection,
     canonical_url: str,
     content_hash: str,
+    provider: str | None = None,
+    source_article_id: str | None = None,
 ) -> str | None:
-    row = db.execute(
-        """
-        SELECT id
-        FROM articles
-        WHERE canonical_url = ? OR content_hash = ?
-        LIMIT 1
-        """,
-        (canonical_url, content_hash),
-    ).fetchone()
+    if provider and source_article_id:
+        row = db.execute(
+            """
+            SELECT id
+            FROM articles
+            WHERE canonical_url = ?
+               OR content_hash = ?
+               OR (provider = ? AND source_article_id = ?)
+            LIMIT 1
+            """,
+            (canonical_url, content_hash, provider, source_article_id),
+        ).fetchone()
+    else:
+        row = db.execute(
+            """
+            SELECT id
+            FROM articles
+            WHERE canonical_url = ? OR content_hash = ?
+            LIMIT 1
+            """,
+            (canonical_url, content_hash),
+        ).fetchone()
     return str(row["id"]) if row else None
 
 
@@ -225,7 +240,15 @@ def _insert_article(
     now: str,
 ) -> tuple[bool, str]:
     canonical_url, content_hash = _article_identity(candidate)
-    existing_id = _find_existing_article_id(db, canonical_url, content_hash)
+    provider = getattr(candidate, "provider", "legacy")
+    source_article_id = getattr(candidate, "source_article_id", None)
+    existing_id = _find_existing_article_id(
+        db,
+        canonical_url,
+        content_hash,
+        provider=provider,
+        source_article_id=source_article_id,
+    )
 
     if existing_id:
         _upsert_topic(db, existing_id, candidate.tag)
@@ -259,8 +282,8 @@ def _insert_article(
         """,
         (
             article_id,
-            getattr(candidate, "provider", "legacy"),
-            getattr(candidate, "source_article_id", None),
+            provider,
+            source_article_id,
             canonical_url,
             candidate.url,
             candidate.title,
