@@ -321,6 +321,7 @@ def test_fetch_to_retrieval_api_end_to_end():
     assert fetch_data["success"] is True
     assert fetch_data["status"] == "success"
     assert fetch_data["total_added"] == 1
+    assert fetch_data["results"]["tech"]["provider_stats"]["content_enriched"] == 1
 
     list_response = client.get("/news?tag=tech")
     assert list_response.status_code == 200
