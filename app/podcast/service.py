@@ -5,7 +5,12 @@ import json
 from typing import Any, Protocol
 
 from app.podcast.models import PodcastScriptResult, QwenCompletion
-from app.podcast.prompt import SYSTEM_PROMPT, build_user_prompt
+from app.podcast.prompt import (
+    HOST_1_PROFILE,
+    HOST_2_PROFILE,
+    SYSTEM_PROMPT,
+    build_user_prompt,
+)
 
 
 class PodcastInputError(ValueError):
@@ -105,6 +110,36 @@ def _normalize_article(item: dict[str, Any], max_chars: int) -> dict[str, Any] |
     }
 
 
+def _finalize_script(body: str) -> str:
+    cleaned = body.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+
+    # Older/custom model prompts may echo the profiles. Avoid duplicate headers.
+    if cleaned.startswith(HOST_1_PROFILE):
+        parts = cleaned.splitlines()
+        body_lines = []
+        passed_profiles = False
+        for line in parts:
+            stripped = line.strip()
+            if not passed_profiles and (
+                not stripped
+                or stripped == HOST_1_PROFILE
+                or stripped == HOST_2_PROFILE
+            ):
+                continue
+            passed_profiles = True
+            body_lines.append(line)
+        cleaned = "\n".join(body_lines).strip()
+
+    return f"{HOST_1_PROFILE}\n\n{HOST_2_PROFILE}\n\n{cleaned}"
+
+
 class PodcastScriptService:
     """Independent JSON -> Qwen -> podcast-script workflow.
 
@@ -175,7 +210,7 @@ class PodcastScriptService:
             ),
         )
         return PodcastScriptResult(
-            script=completion.content,
+            script=_finalize_script(completion.content),
             model=completion.model,
             received_count=received_count,
             selected_count=len(articles),
