@@ -37,11 +37,19 @@ def get_podcast_script_service() -> PodcastScriptService:
 
 
 class PodcastScriptRequest(BaseModel):
-    news: Any = Field(
-        ...,
+    news: Any | None = Field(
+        None,
         description=(
             "手工粘贴的新闻 JSON。可直接传 /news 返回对象、文章数组，"
-            "或它们对应的 JSON 字符串。"
+            "或它们对应的 JSON 字符串。与 news_text 二选一。"
+        ),
+    )
+    news_text: str | None = Field(
+        None,
+        min_length=20,
+        description=(
+            "手工粘贴的新闻长文本，推荐直接使用 GET /news/text 的返回结果。"
+            "与 news 二选一。"
         ),
     )
     target_minutes: int = Field(
@@ -57,21 +65,34 @@ class PodcastScriptRequest(BaseModel):
     )
 
 
-@router.post("/script", summary="将新闻 JSON 整理成双人播客文案")
+@router.post("/script", summary="将新闻 JSON 或长文本整理成双人播客文案")
 async def generate_podcast_script(
     request: PodcastScriptRequest,
     service: PodcastScriptService = Depends(get_podcast_script_service),
 ) -> dict[str, Any]:
-    """独立的 JSON -> Qwen-Plus -> 播客文案流程。
+    """独立的手工输入 -> Qwen-Plus -> 播客文案流程。
 
     该接口不会读取新闻数据库、不会触发抓取，也不会调用音频生成服务。
     """
-    try:
-        result = await service.generate(
-            request.news,
-            target_minutes=request.target_minutes,
-            episode_title=request.episode_title,
+    if (request.news is None) == (request.news_text is None):
+        raise HTTPException(
+            status_code=400,
+            detail="news 与 news_text 必须且只能提供一个",
         )
+
+    try:
+        if request.news_text is not None:
+            result = await service.generate_from_text(
+                request.news_text,
+                target_minutes=request.target_minutes,
+                episode_title=request.episode_title,
+            )
+        else:
+            result = await service.generate(
+                request.news,
+                target_minutes=request.target_minutes,
+                episode_title=request.episode_title,
+            )
     except PodcastInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except QwenConfigError as exc:
