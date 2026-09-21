@@ -119,6 +119,73 @@ def test_podcast_api_accepts_news_list_response_shape():
     assert len(data["source_titles"]) == 20
 
 
+def test_podcast_api_accepts_plain_news_text():
+    fake = FakeQwenClient()
+    service = PodcastScriptService(fake)
+
+    news_text = """新闻主题：hot
+新闻数量：2
+
+【新闻 1】
+标题：第一条热点
+来源：测试源
+摘要：第一条热点摘要。
+正文：
+第一条热点正文内容。
+
+----------------------------------------
+
+【新闻 2】
+标题：第二条热点
+来源：测试源
+摘要：第二条热点摘要。
+正文：
+第二条热点正文内容。
+"""
+
+    app.dependency_overrides[get_podcast_script_service] = lambda: service
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/podcast/script",
+            json={
+                "news_text": news_text,
+                "target_minutes": 6,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_podcast_script_service, None)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["selected_count"] == 2
+    assert data["source_titles"] == ["第一条热点", "第二条热点"]
+    assert "第一条热点正文内容" in fake.user_prompt
+    assert "主播 1 是成年男性" in data["script"]
+
+
+def test_podcast_api_requires_exactly_one_input_mode():
+    fake = FakeQwenClient()
+    service = PodcastScriptService(fake)
+    app.dependency_overrides[get_podcast_script_service] = lambda: service
+    try:
+        client = TestClient(app)
+        neither = client.post("/podcast/script", json={"target_minutes": 8})
+        both = client.post(
+            "/podcast/script",
+            json={
+                "news": {"items": _news_items(1)},
+                "news_text": "这是足够长的新闻长文本，用于测试两个输入同时出现时应当被拒绝。",
+                "target_minutes": 8,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_podcast_script_service, None)
+
+    assert neither.status_code == 400
+    assert both.status_code == 400
+
+
 def test_podcast_api_rejects_invalid_news_json():
     fake = FakeQwenClient()
     service = PodcastScriptService(fake)
