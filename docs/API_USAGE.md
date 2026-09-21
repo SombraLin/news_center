@@ -353,3 +353,168 @@ curl --get "http://localhost:8100/news/search" --data-urlencode "q=人工智能"
 ```
 
 只要以上调用均返回 2xx，并且 `/fetch` 的 `status` 为 `success` 或 `partial`，服务的核心调用链即正常。
+
+
+---
+
+## 13. 健康检查
+
+Liveness：
+
+```bash
+curl http://localhost:8100/health/live
+```
+
+正常：
+
+```json
+{
+  "status": "alive",
+  "service": "news_center",
+  "version": "0.2.0"
+}
+```
+
+Readiness：
+
+```bash
+curl http://localhost:8100/health/ready
+```
+
+Readiness 会检查：
+
+- SQLite 可查询
+- `articles`
+- `article_topics`
+- `articles_fts`
+- `scheduler_config`
+- 默认 Provider 已注册
+
+正常返回 HTTP 200；数据库或默认 Provider 不可用时返回 HTTP 503。
+
+Kubernetes / Docker 编排建议：
+
+```text
+liveness  -> GET /health/live
+readiness -> GET /health/ready
+```
+
+健康检查不会访问 ZAKER 等外部新闻源，避免上游短暂故障导致本服务被错误重启。
+
+---
+
+## 14. 管理 API Key
+
+默认情况下：
+
+```dotenv
+NEWS_CENTER_ADMIN_API_KEY=
+```
+
+为空表示兼容本地开发模式，不启用管理鉴权。
+
+生产环境建议设置：
+
+```dotenv
+NEWS_CENTER_ADMIN_API_KEY=replace-with-a-long-random-secret
+```
+
+启用后，以下管理接口要求：
+
+```http
+X-API-Key: replace-with-a-long-random-secret
+```
+
+受保护接口：
+
+- `POST /fetch`
+- `GET /scheduler/status`
+- `POST /scheduler/config`
+- `POST /scheduler/run`
+
+示例：
+
+```bash
+curl -X POST http://localhost:8100/fetch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: replace-with-a-long-random-secret" \
+  -d '{"tag":"tech","limit_per_tag":3}'
+```
+
+Key 缺失或错误时返回 HTTP 401。
+
+以下读取接口仍保持公开：
+
+- `/`
+- `/health/live`
+- `/health/ready`
+- `/providers`
+- `/topics`
+- `/news`
+- `/news/search`
+- `/news/{id}`
+
+---
+
+## 15. Provider 发现与切换
+
+查看已注册 Provider：
+
+```bash
+curl http://localhost:8100/providers
+```
+
+返回示例：
+
+```json
+{
+  "default_provider": "zaker",
+  "total": 1,
+  "providers": [
+    {
+      "name": "zaker",
+      "description": "ZAKER 新闻主题列表 + best-effort 正文提取",
+      "supports_content": true,
+      "supported_topics": ["hot", "china", "world", "tech"]
+    }
+  ]
+}
+```
+
+手动抓取指定 Provider：
+
+```bash
+curl -X POST http://localhost:8100/fetch \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_ADMIN_KEY" \
+  -d '{
+    "tag": "tech",
+    "provider": "zaker",
+    "limit_per_tag": 5
+  }'
+```
+
+Scheduler 切换 Provider：
+
+```bash
+curl -X POST http://localhost:8100/scheduler/config \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_ADMIN_KEY" \
+  -d '{
+    "provider": "zaker",
+    "tags": ["hot", "tech", "finance"],
+    "interval_minutes": 30
+  }'
+```
+
+默认 Provider：
+
+```dotenv
+NEWS_CENTER_DEFAULT_PROVIDER=zaker
+```
+
+新增 Provider 的实现说明见：
+
+```text
+docs/PROVIDER_GUIDE.md
+```
