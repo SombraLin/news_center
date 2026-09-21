@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="News Center API",
     description="轻量级新闻抓取与内容中心服务。支持多主题定时轮询、按需检索与即时抓取。",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -66,6 +66,11 @@ def index() -> dict[str, str]:
         "docs_url": "/docs",
         "topics_url": "/topics",
         "news_url": "/news",
+        "search_url": "/news/search?q=关键词",
+        "podcast_script_url": "/podcast/script",
+        "providers_url": "/providers",
+        "liveness_url": "/health/live",
+        "readiness_url": "/health/ready",
     }
 
 

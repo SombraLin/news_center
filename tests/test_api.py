@@ -19,6 +19,7 @@ from app.crawler import (
 )
 from app.database import (
     cleanup_old_news,
+    connection,
     get_db_path,
     get_news_by_id,
     get_scheduler_config,
@@ -26,9 +27,13 @@ from app.database import (
     insert_news_batch,
     insert_news_candidate,
     query_news,
+    search_news,
     update_scheduler_config,
 )
+from app.domain import ArticleCandidate
 from app.main import app
+from app.providers import ProviderFetchResult, provider_registry
+import app.security as security_module
 
 
 @pytest.fixture(autouse=True)
@@ -112,15 +117,33 @@ def test_database_insert_and_deduplication():
     assert added == 2
     assert skipped == 0
 
-    # 再次插入相同的 cand1，应该被唯一键去重忽略
+    # 再次插入相同的 cand1，应该被去重忽略
     added2, skipped2 = insert_news_batch([cand1])
     assert added2 == 0
     assert skipped2 == 1
+
+    # 同一 URL 的新闻可以追加新的 topic，而不会重复创建 article
+    cand1_finance = Candidate(
+        title="测试新闻1",
+        source="新华社",
+        url="https://example.com/news/1?utm_source=test",
+        published_at=parse_publish_time("2026-09-21 10:00:00"),
+        summary="这是测试新闻的摘要内容1",
+        tag="finance",
+    )
+    added3, skipped3 = insert_news_batch([cand1_finance])
+    assert added3 == 0
+    assert skipped3 == 1
 
     # 查询验证
     items, total = query_news(tag="tech")
     assert total == 1
     assert items[0]["title"] == "测试新闻1"
+    assert set(items[0]["topics"]) == {"tech", "finance"}
+
+    finance_items, finance_total = query_news(tag="finance")
+    assert finance_total == 2
+    assert any(item["title"] == "测试新闻1" for item in finance_items)
 
     # 关键字模糊查询验证
     items_kw, total_kw = query_news(keyword="央视网")
@@ -128,15 +151,356 @@ def test_database_insert_and_deduplication():
     assert items_kw[0]["source"] == "央视网"
 
 
+
+def test_fts_search_supports_chinese_source_and_tag_filter():
+    tech = Candidate(
+        title="深圳人工智能产业大会开幕",
+        source="科技日报",
+        url="https://example.com/fts/tech",
+        published_at=parse_publish_time("2026-09-21 10:10:00"),
+        summary="大会聚焦人工智能、大模型和机器人产业发展。",
+        tag="tech",
+    )
+    finance = Candidate(
+        title="人工智能企业融资提速",
+        source="财经周刊",
+        url="https://example.com/fts/finance",
+        published_at=parse_publish_time("2026-09-21 10:20:00"),
+        summary="资本市场持续关注人工智能企业融资进展。",
+        tag="finance",
+    )
+    insert_news_batch([tech, finance])
+
+    items, total = search_news("人工智能")
+    assert total == 2
+    assert len(items) == 2
+    assert all("relevance" in item for item in items)
+
+    source_items, source_total = search_news("科技日报")
+    assert source_total == 1
+    assert source_items[0]["title"] == "深圳人工智能产业大会开幕"
+
+    tech_items, tech_total = search_news("人工智能", tag="tech")
+    assert tech_total == 1
+    assert tech_items[0]["tag"] == "tech"
+
+
+def test_short_search_term_falls_back_safely():
+    candidate = Candidate(
+        title="AI 芯片需求持续增长",
+        source="科技观察",
+        url="https://example.com/fts/short",
+        published_at=parse_publish_time("2026-09-21 10:35:00"),
+        summary="AI 芯片市场需求增长，产业链持续扩张。",
+        tag="tech",
+    )
+    insert_news_candidate(candidate)
+
+    items, total = search_news("AI")
+    assert total == 1
+    assert items[0]["title"] == "AI 芯片需求持续增长"
+    assert items[0]["relevance"] is None
+
+
+def test_news_keyword_query_uses_fts_index():
+    candidate = Candidate(
+        title="新能源汽车电池技术突破",
+        source="产业观察",
+        url="https://example.com/fts/auto",
+        published_at=parse_publish_time("2026-09-21 10:40:00"),
+        summary="新型固态电池技术推动新能源汽车续航提升。",
+        tag="auto",
+    )
+    insert_news_candidate(candidate)
+
+    items, total = query_news(keyword="固态电池")
+    assert total == 1
+    assert items[0]["title"] == "新能源汽车电池技术突破"
+
+
+def test_legacy_news_migration_is_idempotent():
+    with connection() as db:
+        db.execute(
+            """
+            INSERT INTO news (id, tag, title, source, url, summary, published_at, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-1",
+                "world",
+                "旧版新闻迁移测试",
+                "旧版来源",
+                "https://example.com/legacy/1?utm_source=old",
+                "这是一条用于验证旧版 news 表迁移的新闻摘要。",
+                "2026-09-21T02:00:00+00:00",
+                "2026-09-21T02:05:00+00:00",
+            ),
+        )
+
+    init_db()
+    first_items, first_total = query_news(tag="world")
+    assert first_total == 1
+    assert first_items[0]["id"] == "legacy-1"
+    assert first_items[0]["canonical_url"] == "https://example.com/legacy/1"
+
+    # Re-running initialization must not duplicate migrated articles/topics.
+    init_db()
+    second_items, second_total = query_news(tag="world")
+    assert second_total == 1
+    assert second_items[0]["id"] == "legacy-1"
+
+
+def test_v02_insert_shadow_writes_legacy_news_table():
+    candidate = Candidate(
+        title="回滚兼容测试",
+        source="测试来源",
+        url="https://example.com/rollback/1",
+        published_at=parse_publish_time("2026-09-21 11:20:00"),
+        summary="这是一条用于验证 V0.1 回滚兼容影子写入的新闻摘要。",
+        tag="tech",
+    )
+    assert insert_news_candidate(candidate) is True
+
+    with connection() as db:
+        row = db.execute(
+            "SELECT tag, title FROM news WHERE url = ?",
+            (candidate.url,),
+        ).fetchone()
+
+    assert row is not None
+    assert row["tag"] == "tech"
+    assert row["title"] == "回滚兼容测试"
+
+
+def test_legacy_scheduler_config_migrates_provider_column():
+    with connection() as db:
+        db.execute("DROP TABLE scheduler_config")
+        db.execute(
+            """
+            CREATE TABLE scheduler_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 1,
+                interval_minutes INTEGER NOT NULL DEFAULT 30,
+                tags_json TEXT NOT NULL,
+                last_run_at TEXT,
+                last_status TEXT,
+                last_result_json TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO scheduler_config (
+                id, enabled, interval_minutes, tags_json, updated_at
+            ) VALUES (1, 0, 45, '["hot", "tech"]', '2026-09-21T00:00:00+00:00')
+            """
+        )
+
+    init_db()
+    cfg = get_scheduler_config()
+    assert cfg["enabled"] is False
+    assert cfg["interval_minutes"] == 45
+    assert cfg["tags"] == ["hot", "tech"]
+    assert cfg["provider"] == "zaker"
+
+
 def test_scheduler_config_persistence():
     cfg = get_scheduler_config()
     assert cfg["interval_minutes"] == 30
+    assert cfg["provider"] == "zaker"
 
-    update_scheduler_config(interval_minutes=15, enabled=False, tags=["hot", "tech"])
+    update_scheduler_config(
+        interval_minutes=15,
+        enabled=False,
+        tags=["hot", "tech"],
+        provider="zaker",
+    )
     new_cfg = get_scheduler_config()
     assert new_cfg["interval_minutes"] == 15
     assert new_cfg["enabled"] is False
     assert new_cfg["tags"] == ["hot", "tech"]
+
+
+class ApiFakeProvider:
+    name = "api-fake"
+
+    async def fetch(self, topic: str) -> ProviderFetchResult:
+        return ProviderFetchResult(
+            articles=[
+                ArticleCandidate(
+                    title="机器人进入家庭服务新阶段",
+                    source="News Center 测试源",
+                    url=f"https://example.com/api-e2e/{topic}",
+                    published_at=parse_publish_time("2026-09-21 11:30:00"),
+                    summary="这是一条用于验证 News Center 完整接口链路的测试摘要。",
+                    content="完整正文说明家庭服务机器人正在进入真实家庭场景，并重点介绍语音交互、儿童陪伴和智能硬件协同能力。",
+                    topic=topic,
+                    provider=self.name,
+                    canonical_url=f"https://example.com/api-e2e/{topic}",
+                )
+            ],
+            stats={"fetched": 1, "valid": 1, "content_enriched": 1},
+        )
+
+
+def test_fetch_to_retrieval_api_end_to_end():
+    provider_registry.register(ApiFakeProvider())
+    client = TestClient(app)
+
+    fetch_response = client.post(
+        "/fetch",
+        json={
+            "tag": "tech",
+            "limit_per_tag": 5,
+            "provider": "api-fake",
+        },
+    )
+    assert fetch_response.status_code == 200
+    fetch_data = fetch_response.json()
+    assert fetch_data["success"] is True
+    assert fetch_data["status"] == "success"
+    assert fetch_data["total_added"] == 1
+    assert fetch_data["results"]["tech"]["provider_stats"]["content_enriched"] == 1
+
+    list_response = client.get("/news?tag=tech")
+    assert list_response.status_code == 200
+    list_data = list_response.json()
+    assert list_data["total"] == 1
+    item = list_data["items"][0]
+    assert item["provider"] == "api-fake"
+    assert "家庭服务机器人" in item["content"]
+    article_id = item["id"]
+
+    search_response = client.get("/news/search", params={"q": "儿童陪伴", "tag": "tech"})
+    assert search_response.status_code == 200
+    search_data = search_response.json()
+    assert search_data["total"] == 1
+    assert search_data["items"][0]["id"] == article_id
+    assert "relevance" in search_data["items"][0]
+
+    detail_response = client.get(f"/news/{article_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["id"] == article_id
+    assert detail["title"] == "机器人进入家庭服务新阶段"
+    assert "语音交互" in detail["content"]
+
+
+def test_news_text_endpoint_returns_copyable_plain_text():
+    with_content = ArticleCandidate(
+        title="热点正文测试",
+        source="测试新闻源",
+        url="https://example.com/text/hot-1",
+        published_at=parse_publish_time("2026-09-21 11:40:00"),
+        summary="这是热点正文测试摘要。",
+        content="这是可以直接复制给大模型的完整新闻正文内容。",
+        topic="hot",
+        provider="api-fake",
+    )
+    summary_only = ArticleCandidate(
+        title="仅摘要测试",
+        source="测试新闻源",
+        url="https://example.com/text/hot-2",
+        published_at=parse_publish_time("2026-09-21 11:30:00"),
+        summary="这篇新闻只有摘要，没有抓取到完整正文。",
+        content=None,
+        topic="hot",
+        provider="api-fake",
+    )
+    insert_news_batch([with_content, summary_only])
+
+    client = TestClient(app)
+    response = client.get("/news/text?tag=hot&limit=20")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    text = response.text
+    assert "新闻主题：hot" in text
+    assert "新闻数量：2" in text
+    assert "【新闻 1】" in text
+    assert "标题：热点正文测试" in text
+    assert "这是可以直接复制给大模型的完整新闻正文内容。" in text
+    assert "标题：仅摘要测试" in text
+    assert "未抓取到完整正文，请以摘要信息为准。" in text
+    assert '"items"' not in text
+
+
+def test_health_and_provider_discovery_endpoints():
+    client = TestClient(app)
+
+    live = client.get("/health/live")
+    assert live.status_code == 200
+    assert live.json()["status"] == "alive"
+
+    ready = client.get("/health/ready")
+    assert ready.status_code == 200
+    ready_data = ready.json()
+    assert ready_data["status"] == "ready"
+    assert ready_data["checks"]["database"]["ready"] is True
+    assert "zaker" in ready_data["checks"]["providers"]["registered"]
+
+    providers = client.get("/providers")
+    assert providers.status_code == 200
+    provider_data = providers.json()
+    assert provider_data["default_provider"] == "zaker"
+    zaker = next(item for item in provider_data["providers"] if item["name"] == "zaker")
+    assert zaker["supports_content"] is True
+    assert "tech" in zaker["supported_topics"]
+
+
+def test_admin_api_key_protects_management_endpoints(monkeypatch):
+    provider_registry.register(ApiFakeProvider())
+    monkeypatch.setattr(
+        security_module,
+        "settings",
+        type("SecuritySettings", (), {"admin_api_key": "test-secret"})(),
+    )
+    client = TestClient(app)
+
+    # Public read APIs stay public.
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/news").status_code == 200
+    assert client.get("/providers").status_code == 200
+
+    # Management APIs require a key once configured.
+    assert client.post("/fetch", json={"tag": "tech", "provider": "api-fake"}).status_code == 401
+    assert client.get("/scheduler/status").status_code == 401
+
+    headers = {"X-API-Key": "test-secret"}
+    fetch = client.post(
+        "/fetch",
+        json={"tag": "tech", "provider": "api-fake", "limit_per_tag": 1},
+        headers=headers,
+    )
+    assert fetch.status_code == 200
+    assert fetch.json()["success"] is True
+
+    status = client.get("/scheduler/status", headers=headers)
+    assert status.status_code == 200
+
+
+def test_scheduler_api_can_select_registered_provider():
+    provider_registry.register(ApiFakeProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/scheduler/config",
+        json={
+            "provider": "api-fake",
+            "tags": ["tech"],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["config"]["provider"] == "api-fake"
+    assert data["scheduler_status"]["configured_provider"] == "api-fake"
+
+    invalid = client.post(
+        "/scheduler/config",
+        json={"provider": "missing-provider"},
+    )
+    assert invalid.status_code == 400
 
 
 def test_api_routes():
@@ -176,11 +540,18 @@ def test_api_routes():
     assert res_single.status_code == 200
     assert res_single.json()["title"] == "科技前沿快讯"
 
-    # 5. 测试 GET /scheduler/status
+    # 5. 测试 GET /news/search
+    res_search = client.get("/news/search?q=科技前沿")
+    assert res_search.status_code == 200
+    search_data = res_search.json()
+    assert search_data["total"] >= 1
+    assert search_data["items"][0]["title"] == "科技前沿快讯"
+
+    # 6. 测试 GET /scheduler/status
     res_status = client.get("/scheduler/status")
     assert res_status.status_code == 200
 
-    # 6. 测试 POST /scheduler/config
+    # 7. 测试 POST /scheduler/config
     res_update = client.post("/scheduler/config", json={"interval_minutes": 20, "tags": ["china", "world"]})
     assert res_update.status_code == 200
     assert res_update.json()["config"]["interval_minutes"] == 20

@@ -1,0 +1,390 @@
+# News Center V0.2 Architecture
+
+## 1. Goal
+
+V0.2 evolves News Center from a ZAKER-specific crawler service into a provider-independent News Content Hub while preserving the existing public API.
+
+```text
+API / Scheduler
+      |
+      v
+IngestionService
+      |
+      +----------------+
+      |                |
+      v                v
+NewsProvider       NewsRepository
+      |                |
+      v                v
+ZakerProvider       SQLite
+```
+
+The service remains responsible for acquisition, normalization, validation, deduplication, persistence and retrieval. LLM rewriting, persona-specific summarization, recommendation and TTS stay outside this service.
+
+## 2. Layer boundaries
+
+### domain
+
+`app/domain/`
+
+Provider-independent domain and identity logic:
+
+- `ArticleCandidate`
+- `TopicIngestionResult`
+- `IngestionResult`
+- canonical URL normalization
+- provider-independent content fingerprinting
+
+`ArticleCandidate.tag` remains as a compatibility alias for `topic`.
+
+### providers
+
+`app/providers/`
+
+- `NewsProvider`: provider contract
+- `ProviderRegistry`: runtime registry
+- `ZakerProvider`: adapter around the existing ZAKER crawler
+
+Routes and scheduler code no longer call `fetch_zaker()` directly.
+
+### services
+
+`app/services/ingestion.py`
+
+`IngestionService` coordinates:
+
+1. topic normalization,
+2. bounded concurrent provider fetching,
+3. repository persistence,
+4. per-topic statistics,
+5. partial/failure aggregation,
+6. in-process run serialization.
+
+### repositories
+
+`app/repositories/`
+
+Repository interfaces isolate persistence from application services. The current implementation uses SQLite, but service/provider code is persistence agnostic.
+
+## 3. V0.2 persistence model
+
+V0.2 introduces an authoritative normalized article model.
+
+```text
+articles
+  id
+  provider
+  source_article_id
+  canonical_url
+  url
+  title
+  source
+  summary
+  content
+  image_url
+  language
+  published_at
+  fetched_at
+  updated_at
+  content_hash
+
+article_topics
+  article_id
+  topic
+```
+
+One article may therefore belong to multiple topics:
+
+```text
+Article
+  +-- hot
+  +-- tech
+  +-- finance
+```
+
+The old `news` table remains as a V0.1 compatibility shadow table during the migration window.
+
+## 4. Article identity and deduplication
+
+An incoming article is considered an existing article when any stable identity matches:
+
+1. `provider + source_article_id`, when the provider exposes one,
+2. canonical URL,
+3. normalized content hash.
+
+### Canonical URL
+
+Canonicalization currently:
+
+- lowercases scheme/host,
+- removes URL fragments,
+- removes obvious tracking parameters such as `utm_*`, `from`, `ref`,
+- removes default ports,
+- sorts remaining query parameters,
+- preserves semantic query parameters.
+
+### Content hash
+
+The content fingerprint uses normalized:
+
+```text
+title + summary
+```
+
+with Unicode NFKC normalization, whitespace normalization and case folding before SHA-256 hashing.
+
+This intentionally provides conservative syndicated-content deduplication without introducing embeddings or LLM dependencies.
+
+## 5. Multi-topic merge behavior
+
+When a duplicate article is ingested from another topic:
+
+- no second `articles` row is created,
+- the new topic is inserted into `article_topics`,
+- missing richer fields such as content/image may be backfilled,
+- the ingestion result counts it as historical duplicate rather than a new article.
+
+This fixes the V0.1 limitation where URL uniqueness caused later topic associations to be lost.
+
+## 6. Automatic legacy migration
+
+At database initialization V0.2:
+
+1. creates `articles` and `article_topics` if needed,
+2. reads existing V0.1 `news` rows,
+3. computes canonical URL and content hash,
+4. merges duplicate legacy rows when identities match,
+5. creates topic associations,
+6. preserves existing article IDs where possible.
+
+The migration is idempotent and can safely run on every service startup.
+
+## 7. Rollback compatibility
+
+The V0.1 `news` table is retained during V0.2.
+
+Newly created V0.2 articles are also shadow-written into `news` so that a code rollback to V0.1 still sees articles collected after the upgrade. Multi-topic information remains authoritative only in `article_topics`; the shadow row keeps one compatibility tag.
+
+Cleanup runs against both the authoritative V0.2 article store and the V0.1 shadow table.
+
+The legacy table should only be removed in a later version after the rollback window closes.
+
+## 8. Public API compatibility
+
+Existing endpoints remain:
+
+- `GET /topics`
+- `GET /news`
+- `GET /news/{id}`
+- `POST /fetch`
+- `GET /scheduler/status`
+- `POST /scheduler/config`
+- `POST /scheduler/run`
+
+`GET /news` continues returning the legacy `tag` field and additionally exposes:
+
+- `topics`
+- `canonical_url`
+- `provider`
+- `language`
+- `content`
+- `image_url`
+- `updated_at`
+
+When a request filters by a tag, the legacy `tag` response field is set to the requested matching topic.
+
+## 9. SQLite behavior
+
+Batch ingestion uses one connection/transaction rather than committing one article at a time.
+
+Connections enable:
+
+- foreign keys,
+- busy timeout.
+
+SQLite remains the recommended database for the current deployment scale.
+
+## 10. Scheduler behavior
+
+Scheduler engine state and fetch-job enabled state are treated separately.
+
+Resume/pause/config operations can initialize the in-process scheduler engine when required, avoiding a persisted `enabled=true` state with no scheduler actually running.
+
+Both scheduler and manual fetch operations now enter through `IngestionService`.
+
+## 11. Tests added for V0.2
+
+The branch includes tests covering:
+
+- provider-independent ingestion,
+- requested-topic normalization/deduplication,
+- canonical URL normalization,
+- content hash normalization,
+- URL duplicate detection,
+- multi-topic article association,
+- existing V0.1 API behavior.
+
+## 12. Full-text retrieval
+
+V0.2 now includes SQLite FTS5 retrieval through an `articles_fts` virtual table.
+
+Indexed fields:
+
+- title
+- summary
+- source
+- content
+
+The FTS index uses the `trigram` tokenizer so Chinese continuous-text queries such as `人工智能`, `新能源汽车`, or `深圳` can match naturally without requiring external Chinese segmentation services.
+
+Index lifecycle:
+
+1. startup rebuild from authoritative `articles`,
+2. new article insertion sync,
+3. richer-field backfill sync,
+4. expired article cleanup sync.
+
+Existing `GET /news?keyword=...` remains compatible but now uses FTS5 internally.
+
+A dedicated endpoint is also available:
+
+`GET /news/search?q=...&tag=...`
+
+It uses BM25 ranking and returns:
+
+- `relevance`
+- `match_snippet`
+- normal article metadata and topics.
+
+This gives upper-layer AI applications a relevance-oriented retrieval API while preserving the chronological list API.
+
+## 13. Next phases
+
+After this retrieval foundation:
+
+1. richer article body/image extraction
+2. improved ingestion result identity reporting
+3. admin authentication for mutation endpoints
+4. health/readiness/metrics
+5. additional providers (RSS and curated sources)
+6. search query normalization / synonyms if real usage requires it
+7. removal of the V0.1 shadow table after the rollback window
+
+PostgreSQL, Redis, Celery and Elasticsearch are intentionally not required for V0.2.
+
+
+## 13. Article body enrichment
+
+V0.2 performs best-effort article-body enrichment before persistence.
+
+Boundary:
+
+- article list metadata still comes from the Provider source API,
+- body extraction is implemented in `app/providers/content.py`,
+- the current implementation does **not** extract or persist images,
+- body extraction failure is non-fatal.
+
+Extraction order:
+
+1. JSON-LD `articleBody`,
+2. paragraph-based HTML fallback,
+3. normalize HTML entities / Unicode / whitespace,
+4. cap stored text by `NEWS_CENTER_CONTENT_MAX_CHARS`.
+
+Runtime controls:
+
+- `NEWS_CENTER_CONTENT_FETCH_ENABLED`
+- `NEWS_CENTER_CONTENT_FETCH_TIMEOUT_SECONDS`
+- `NEWS_CENTER_CONTENT_FETCH_CONCURRENCY`
+- `NEWS_CENTER_CONTENT_MAX_CHARS`
+
+Provider statistics expose:
+
+- `content_attempted`
+- `content_enriched`
+- `content_failed`
+
+When richer content is later added to an existing article, the article row and FTS index are updated together.
+
+## 14. API verification contract
+
+CI includes an end-to-end API contract test using an in-memory fake Provider and the real FastAPI routes / SQLite repository:
+
+```text
+POST /fetch
+    ↓
+GET /news
+    ↓
+GET /news/search
+    ↓
+GET /news/{id}
+```
+
+The test verifies that:
+
+- ingestion succeeds,
+- Provider statistics are returned,
+- body content is persisted,
+- body-only keywords are searchable through FTS5,
+- the same article is returned through list/search/detail APIs.
+
+See `docs/API_USAGE.md` for operator and caller instructions.
+
+
+## 15. Operational hardening
+
+V0.2 exposes two health endpoints:
+
+```text
+GET /health/live
+GET /health/ready
+```
+
+`/health/live` only reports process liveness.
+
+`/health/ready` verifies:
+
+- SQLite is queryable,
+- required V0.2 tables/indexes exist,
+- the configured default Provider is registered.
+
+Readiness intentionally does not call upstream news sources, so a temporary source outage does not make the process fail orchestration health checks.
+
+### Admin API authentication
+
+`NEWS_CENTER_ADMIN_API_KEY` is optional.
+
+When empty, V0.2 preserves local/backward-compatible behavior.
+
+When configured, management endpoints require `X-API-Key`:
+
+- `POST /fetch`
+- all `/scheduler/*` routes
+
+Read-only content, health and discovery APIs remain public.
+
+The comparison uses constant-time secret comparison.
+
+## 16. Provider runtime selection
+
+Provider selection is now part of runtime configuration.
+
+Discovery:
+
+```text
+GET /providers
+```
+
+Manual ingestion may specify a Provider per request.
+
+Scheduler configuration persists a Provider name in SQLite and uses it on every run.
+
+Legacy databases without the `scheduler_config.provider` column are upgraded automatically during `init_db()`.
+
+The default provider comes from:
+
+```dotenv
+NEWS_CENTER_DEFAULT_PROVIDER=zaker
+```
+
+Provider implementation guidance is documented in `docs/PROVIDER_GUIDE.md`.

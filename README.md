@@ -1,138 +1,276 @@
-# News Center (新闻中心服务)
+# News Center V0.2
 
-轻量、独立的定时新闻抓取与文字内容检索后端微服务。
+轻量、独立的 **News Content & Retrieval Hub**。
 
-- **职责单一**：专注于新闻抓取、去重持久化与按主题检索文字内容，不耦合 LLM 改写或音频合成；
-- **主题预设明确**：内置 10 大已验证的 Zaker 新闻主题，提供 `/topics` 接口供用户或前端直接选择，调用方无需盲猜；
-- **内嵌定时调度**：基于 APScheduler 实现单进程轻量级定时轮询抓取，无需外部 Celery 或 Cron 依赖；
-- **配置热更新持久化**：定时任务周期、启停状态、抓取主题存放在 SQLite 中，修改即刻生效且重启不丢失；
-- **去重与自动清理**：基于新闻原始 URL 自动去重，支持配置自动清理超过 N 天的过期新闻。
+News Center 负责：
 
----
-
-## 1. 预设新闻主题 (10大分类)
-
-通过 `GET /topics` 即可获取全部可选主题：
-
-| Tag | 主题中文名 | 描述 |
-|---|---|---|
-| `hot` | 热点 | 实时热门资讯与高关注度全网头条 |
-| `china` | 国内 | 国内重点政经要闻与社会焦点新闻 |
-| `world` | 国际 | 全球国际要闻、大国外交与重大突发事件 |
-| `military` | 军事 | 国防军工、战略演练与国际安全动态 |
-| `finance` | 财经 | 宏观经济、股市投资、商业地产与产业理财 |
-| `internet` | 互联网 | 互联网科技巨头、商业模式与创投动向 |
-| `tech` | 科技 | 数码电子、人工智能、硬核前沿技术创新 |
-| `auto` | 汽车 | 新能源汽车、行业新车发布与智能座舱技术 |
-| `sports` | 体育 | 足球、篮球、综合赛事、奥运热点与体坛风云 |
-| `entertainment` | 娱乐 | 影视剧评、文化演出与文娱动态 |
-
----
-
-## 2. 接口列表 (RESTful API)
-
-交互式文档请访问服务启动后的: `http://localhost:8100/docs`
-
-### 2.1 主题选择
-- **`GET /topics`**
-  - 获取所有预设主题列表以及当前各主题在数据库中的存量文章数。
-
-### 2.2 新闻查询
-- **`GET /news`**
-  - 参数：
-    - `tag` (可选): 按主题过滤，例如 `?tag=tech`
-    - `keyword` (可选): 按标题或摘要内容模糊搜索
-    - `limit` (可选): 分页每页数量，默认 20，最大 100
-    - `offset` (可选): 分页偏移量，默认 0
-  - 返回按发布时间倒序排列的新闻列表与总记录数。
-- **`GET /news/{id}`**
-  - 根据唯一 ID 获取单篇新闻详情。
-
-### 2.3 按需手动抓取
-- **`POST /fetch`**
-  - 请求示例：
-    ```json
-    {
-      "tag": "tech",
-      "limit_per_tag": 10
-    }
-    ```
-    或批量主题抓取：
-    ```json
-    {
-      "tags": ["china", "world", "finance"],
-      "limit_per_tag": 5
-    }
-    ```
-  - 即时抓取并入库，返回入库增量与跳过重复统计。
-
-### 2.4 定时调度控制
-- **`GET /scheduler/status`**
-  - 查看当前调度器启停状态、抓取周期、下一次运行时间与上一次运行执行报告。
-- **`POST /scheduler/config`**
-  - 请求示例：
-    ```json
-    {
-      "enabled": true,
-      "interval_minutes": 30,
-      "tags": ["hot", "china", "world", "tech", "finance"]
-    }
-    ```
-  - 动态热更新调度器参数，并在 SQLite 中持久化。
-- **`POST /scheduler/run`**
-  - 立即手动触发一轮全量定时任务。
-
----
-
-## 3. 项目结构
-
-```
-news_center/
-├── app/
-│   ├── __init__.py
-│   ├── config.py           # 环境变量与默认参数配置
-│   ├── database.py         # SQLite 数据库模型、CRUD与自动建表
-│   ├── crawler/
-│   │   ├── __init__.py
-│   │   └── zaker.py        # 独立无依赖的 Zaker 抓取实现与 10 大主题预设
-│   ├── scheduler.py        # APScheduler 定时轮询调度管理器
-│   ├── routes/
-│   │   ├── __init__.py
-│   │   ├── topics.py       # GET /topics
-│   │   ├── news.py         # GET /news, GET /news/{id}
-│   │   ├── fetch.py        # POST /fetch
-│   │   └── scheduler_route.py # GET/POST /scheduler/*
-│   └── main.py             # FastAPI 应用入口与生命周期管理
-├── data/                   # 存放 SQLite 数据库文件 (news.db)
-├── tests/
-│   └── test_api.py         # 单元与接口自动化测试
-├── .env.example            # 配置项模板
-├── requirements.txt        # 依赖清单
-└── run.sh                  # 一键启动脚本
+```text
+抓取
+  ↓
+正文提取
+  ↓
+规范化
+  ↓
+去重
+  ↓
+多主题关联
+  ↓
+SQLite 持久化
+  ↓
+FTS5 全文检索
 ```
 
----
+新闻采集核心层不负责 LLM 改写、儿童化表达、推荐策略或 TTS。
 
-## 4. 快速开始
+V0.2 额外提供一个**完全独立的 Podcast Script 模块**：仅接受人工粘贴的新闻 JSON，调用 Qwen-Plus 整理为双主播播客文案；它不会自动触发新闻抓取，也不会自动调用音频生成服务。
 
-### 4.1 安装依赖
+## 当前能力
+
+- 10 个预设新闻主题
+- Provider 抽象，当前默认 ZAKER
+- 手动抓取与定时抓取统一经过 `IngestionService`
+- 正文页面 best-effort 提取，不抓取图片
+- `provider + source_article_id` / canonical URL / content hash 三层去重
+- 一篇文章可关联多个 topic
+- SQLite 单事务批量写入
+- SQLite FTS5 + trigram 中文全文检索
+- BM25 相关性排序
+- V0.1 `news` shadow table，支持回滚兼容
+- GitHub Actions 自动运行 pytest
+- `GET /news/text`：直接输出标题/摘要/正文组成的新闻长文本
+- 独立 `POST /podcast/script`：手工新闻 JSON 或长文本 → Qwen-Plus → 双主播播客文案
+
+## 快速开始
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 4.2 运行服务
-```bash
-./run.sh
-# 或者
-source .venv/bin/activate
+cp .env.example .env
 python -m app.main
 ```
-服务默认监听在 `http://0.0.0.0:8100`。
 
-### 4.3 运行测试
-```bash
-source .venv/bin/activate
-pytest tests/
+默认地址：
+
+```text
+http://localhost:8100
 ```
+
+OpenAPI：
+
+```text
+http://localhost:8100/docs
+```
+
+完整调用说明：
+
+**[docs/API_USAGE.md](docs/API_USAGE.md)**
+
+架构说明：
+
+**[docs/architecture-v0.2.md](docs/architecture-v0.2.md)**
+
+Podcast Script 使用说明：
+
+**[docs/PODCAST_SCRIPT.md](docs/PODCAST_SCRIPT.md)**
+
+## 最短验证流程
+
+```bash
+curl http://localhost:8100/
+curl http://localhost:8100/topics
+
+curl -X POST http://localhost:8100/fetch \
+  -H "Content-Type: application/json" \
+  -d '{"tag":"tech","limit_per_tag":3}'
+
+curl "http://localhost:8100/news?tag=tech&limit=3"
+
+curl --get "http://localhost:8100/news/search" \
+  --data-urlencode "q=人工智能"
+```
+
+## API
+
+| Method | Path | 用途 |
+|---|---|---|
+| GET | `/` | 服务状态 |
+| GET | `/topics` | 获取主题及文章数量 |
+| POST | `/fetch` | 手动抓取并入库 |
+| GET | `/news` | 按时间分页查询；兼容 keyword 搜索 |
+| GET | `/news/search` | FTS5 + BM25 全文检索 |
+| GET | `/news/text` | 返回适合直接复制给 LLM 的新闻长文本 |
+| GET | `/news/{id}` | 单篇详情 |
+| GET | `/scheduler/status` | Scheduler 状态 |
+| POST | `/scheduler/config` | 更新 Scheduler 配置 |
+| POST | `/scheduler/run` | 立即执行一轮定时任务 |
+| POST | `/podcast/script` | 将手工粘贴的新闻 JSON 整理为 Qwen-Plus 双主播播客文案 |
+
+## 主题
+
+`hot`, `china`, `world`, `military`, `finance`, `internet`, `tech`, `auto`, `sports`, `entertainment`
+
+## 正文提取
+
+默认开启：
+
+```dotenv
+NEWS_CENTER_CONTENT_FETCH_ENABLED=true
+NEWS_CENTER_CONTENT_FETCH_TIMEOUT_SECONDS=8
+NEWS_CENTER_CONTENT_FETCH_CONCURRENCY=4
+NEWS_CENTER_CONTENT_MAX_CHARS=30000
+```
+
+提取策略：
+
+1. 优先 JSON-LD `articleBody`
+2. 回退到有效正文段落
+3. HTML 转为纯文本
+4. 页面抓取失败时保留 summary，不让整条新闻失败
+
+项目当前**不抓取图片**。
+
+`POST /fetch` 的 `provider_stats` 可查看正文抓取结果：
+
+```json
+{
+  "content_attempted": 15,
+  "content_enriched": 11,
+  "content_failed": 4
+}
+```
+
+## 搜索
+
+推荐 AI / 玩偶上层服务使用：
+
+```bash
+curl --get "http://localhost:8100/news/search" \
+  --data-urlencode "q=机器人 人工智能" \
+  --data-urlencode "tag=tech" \
+  --data-urlencode "limit=5"
+```
+
+搜索索引覆盖：
+
+- title
+- summary
+- source
+- content
+
+搜索结果按 BM25 相关性排序。
+
+## 数据模型
+
+```text
+articles
+   │
+   ├──── article_topics
+   │
+   ├──── articles_fts
+   │
+   └──── legacy news shadow table
+```
+
+## 项目结构
+
+```text
+app/
+├── domain/
+│   ├── models.py
+│   └── identity.py
+├── providers/
+│   ├── base.py
+│   ├── registry.py
+│   ├── zaker.py
+│   └── content.py
+├── podcast/
+│   ├── prompt.py
+│   ├── qwen.py
+│   ├── models.py
+│   └── service.py
+├── repositories/
+│   └── news.py
+├── services/
+│   └── ingestion.py
+├── crawler/
+│   └── zaker.py
+├── routes/
+│   ├── fetch.py
+│   ├── news.py
+│   ├── topics.py
+│   ├── podcast.py
+│   └── scheduler_route.py
+├── database.py
+├── scheduler.py
+├── config.py
+└── main.py
+
+docs/
+├── API_USAGE.md
+└── architecture-v0.2.md
+```
+
+## 测试
+
+```bash
+PYTHONPATH=. python -m pytest -q
+```
+
+GitHub Actions 会在 PR 更新后自动执行同一测试集。
+
+
+## 健康检查与管理鉴权
+
+公开健康检查：
+
+```text
+GET /health/live
+GET /health/ready
+```
+
+Provider 发现：
+
+```text
+GET /providers
+```
+
+生产环境建议设置：
+
+```dotenv
+NEWS_CENTER_ADMIN_API_KEY=replace-with-a-long-random-secret
+```
+
+设置后，以下管理接口必须携带：
+
+```http
+X-API-Key: replace-with-a-long-random-secret
+```
+
+受保护接口：
+
+- `POST /fetch`
+- `GET /scheduler/status`
+- `POST /scheduler/config`
+- `POST /scheduler/run`
+- `POST /podcast/script`
+
+未设置 `NEWS_CENTER_ADMIN_API_KEY` 时保持本地开发兼容模式，不要求 Key。
+
+## Provider 扩展
+
+默认 Provider：
+
+```dotenv
+NEWS_CENTER_DEFAULT_PROVIDER=zaker
+```
+
+Scheduler 配置可以持久化指定 Provider，`POST /fetch` 也可按请求选择 Provider。
+
+新增数据源开发指南：
+
+**[docs/PROVIDER_GUIDE.md](docs/PROVIDER_GUIDE.md)**
+
+完整 API 与鉴权说明：
+
+**[docs/API_USAGE.md](docs/API_USAGE.md)**

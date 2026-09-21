@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import PlainTextResponse
+
 from app.crawler import normalize_tag
-from app.database import get_news_by_id, query_news
+from app.database import get_news_by_id, query_news, search_news
+from app.services.news_text import render_news_text
 
 router = APIRouter()
 
@@ -11,22 +15,22 @@ router = APIRouter()
 @router.get("/news", summary="查询已入库的新闻列表")
 def get_news_list(
     tag: str | None = Query(None, description="主题分类过滤，例如 hot, tech, china 等"),
-    keyword: str | None = Query(None, description="按标题或摘要关键词模糊匹配搜索"),
+    keyword: str | None = Query(None, description="全文关键词搜索；内部使用 SQLite FTS5"),
     limit: int = Query(20, ge=1, le=100, description="分页大小，默认 20，最大 100"),
     offset: int = Query(0, ge=0, description="分页偏移量，默认 0"),
 ) -> dict[str, Any]:
-    """
-    分页查询已抓取入库的新闻文字内容。
-    - 支持按分类 `tag` 筛选
-    - 支持按关键字 `keyword` 搜索
-    - 结果按发布时间倒序排列
+    """分页查询新闻。
+
+    - tag: 按主题过滤
+    - keyword: 使用 FTS5 全文索引搜索 title / summary / source / content
+    - 无 keyword 时按发布时间倒序
     """
     clean_tag = None
     if tag:
         try:
             clean_tag = normalize_tag(tag)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     items, total = query_news(
         tag=clean_tag,
@@ -44,9 +48,82 @@ def get_news_list(
     }
 
 
+@router.get(
+    "/news/text",
+    response_class=PlainTextResponse,
+    summary="获取可直接复制给 LLM 的新闻长文本",
+)
+def get_news_text(
+    tag: str | None = Query("hot", description="主题分类，默认 hot"),
+    keyword: str | None = Query(None, description="可选全文关键词过滤"),
+    limit: int = Query(20, ge=1, le=50, description="新闻数量，默认 20"),
+    offset: int = Query(0, ge=0),
+    max_content_chars: int = Query(
+        2500,
+        ge=500,
+        le=30000,
+        description="每篇正文最多输出字符数，默认 2500",
+    ),
+) -> PlainTextResponse:
+    """按时间倒序返回纯文本新闻集合，不返回 JSON。"""
+    clean_tag = None
+    if tag:
+        try:
+            clean_tag = normalize_tag(tag)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    items, _ = query_news(
+        tag=clean_tag,
+        keyword=keyword,
+        limit=limit,
+        offset=offset,
+    )
+    text = render_news_text(
+        items,
+        tag=clean_tag,
+        max_content_chars=max_content_chars,
+    )
+    return PlainTextResponse(
+        content=text,
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+@router.get("/news/search", summary="全文搜索新闻")
+def search_news_endpoint(
+    q: str = Query(..., min_length=1, max_length=200, description="全文搜索关键词"),
+    tag: str | None = Query(None, description="可选主题过滤，例如 tech, finance"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    """使用 SQLite FTS5 + BM25 相关性排序进行新闻全文搜索。"""
+    clean_tag = None
+    if tag:
+        try:
+            clean_tag = normalize_tag(tag)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    items, total = search_news(
+        query=q,
+        tag=clean_tag,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "query": q,
+        "tag": clean_tag,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "count": len(items),
+        "items": items,
+    }
+
+
 @router.get("/news/{news_id}", summary="获取单篇新闻详情")
 def get_single_news(news_id: str) -> dict[str, Any]:
-    """根据新闻唯一 ID 获取新闻详情"""
     item = get_news_by_id(news_id)
     if not item:
         raise HTTPException(status_code=404, detail="未找到对应新闻记录")
