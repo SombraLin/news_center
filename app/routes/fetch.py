@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.crawler import normalize_tag
+from app.security import require_admin_api_key
 from app.services import ingestion_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_api_key)])
 
 
 class FetchRequest(BaseModel):
     tag: str | None = Field(None, description="要抓取的主题 tag，如 hot, tech。与 tags 传其一即可")
     tags: list[str] | None = Field(None, description="要批量抓取的多个主题 tag 列表")
     limit_per_tag: int = Field(10, ge=1, le=20, description="每个主题最多入库的新闻数量，默认 10，上限 20")
-    provider: str = Field("zaker", description="新闻 Provider 名称，当前默认 zaker")
+    provider: str | None = Field(None, description="新闻 Provider 名称；为空时使用系统默认 Provider")
 
 
 @router.post("/fetch", summary="手动触发新闻抓取与入库")
