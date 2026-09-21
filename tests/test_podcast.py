@@ -25,8 +25,6 @@ class FakeQwenClient:
         self.user_prompt = user_prompt
         return QwenCompletion(
             content=(
-                "主播 1 是成年男性，嗓音低沉，略带沙哑，吐字清晰，语速略微偏快\n\n"
-                "主播 2 是年轻女性，嗓音偏御，略哑，略微低沉\n\n"
                 "主播 1 语调平缓：“今天先从最受关注的一组新闻聊起。”\n\n"
                 "主播 2 简短回应：“好，我们接着往下梳理。”"
             ),
