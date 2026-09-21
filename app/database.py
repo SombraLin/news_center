@@ -270,6 +270,7 @@ def init_db() -> None:
                 enabled INTEGER NOT NULL DEFAULT 1,
                 interval_minutes INTEGER NOT NULL DEFAULT 30,
                 tags_json TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'zaker',
                 last_run_at TEXT,
                 last_status TEXT,
                 last_result_json TEXT,
@@ -277,6 +278,14 @@ def init_db() -> None:
             );
             """
         )
+
+        scheduler_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(scheduler_config)").fetchall()
+        }
+        if "provider" not in scheduler_columns:
+            db.execute(
+                "ALTER TABLE scheduler_config ADD COLUMN provider TEXT NOT NULL DEFAULT 'zaker'"
+            )
 
         _migrate_legacy_news(db)
         _rebuild_fts(db)
@@ -288,14 +297,15 @@ def init_db() -> None:
             db.execute(
                 """
                 INSERT INTO scheduler_config (
-                    id, enabled, interval_minutes, tags_json,
+                    id, enabled, interval_minutes, tags_json, provider,
                     last_run_at, last_status, last_result_json, updated_at
-                ) VALUES (1, ?, ?, ?, NULL, NULL, NULL, ?)
+                ) VALUES (1, ?, ?, ?, ?, NULL, NULL, NULL, ?)
                 """,
                 (
                     1 if settings.scheduler_autostart else 0,
                     settings.fetch_interval_minutes,
                     initial_tags,
+                    settings.default_provider,
                     now,
                 ),
             )
@@ -689,11 +699,28 @@ def cleanup_old_news(days: int) -> int:
         return deleted
 
 
+def check_database_readiness() -> dict[str, Any]:
+    """Verify the SQLite store and required V0.2 schema are queryable."""
+    required = {"articles", "article_topics", "articles_fts", "scheduler_config"}
+    with connection() as db:
+        db.execute("SELECT 1").fetchone()
+        rows = db.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        ).fetchall()
+        available = {str(row["name"]) for row in rows}
+        missing = sorted(required - available)
+        if missing:
+            return {"ready": False, "missing": missing}
+        db.execute("SELECT COUNT(*) FROM articles").fetchone()
+        db.execute("SELECT COUNT(*) FROM articles_fts").fetchone()
+    return {"ready": True, "missing": []}
+
+
 def get_scheduler_config() -> dict[str, Any]:
     with connection() as db:
         row = db.execute(
             """
-            SELECT enabled, interval_minutes, tags_json, last_run_at,
+            SELECT enabled, interval_minutes, tags_json, provider, last_run_at,
                    last_status, last_result_json, updated_at
             FROM scheduler_config
             WHERE id = 1
@@ -709,6 +736,7 @@ def get_scheduler_config() -> dict[str, Any]:
             "enabled": bool(row["enabled"]),
             "interval_minutes": int(row["interval_minutes"]),
             "tags": tags,
+            "provider": row["provider"] or settings.default_provider,
             "last_run_at": row["last_run_at"],
             "last_status": row["last_status"],
             "last_result": last_result,
@@ -720,24 +748,27 @@ def update_scheduler_config(
     enabled: bool | None = None,
     interval_minutes: int | None = None,
     tags: list[str] | None = None,
+    provider: str | None = None,
 ) -> dict[str, Any]:
     current = get_scheduler_config()
     new_enabled = current["enabled"] if enabled is None else enabled
     new_interval = current["interval_minutes"] if interval_minutes is None else max(1, interval_minutes)
     new_tags = current["tags"] if tags is None else tags
+    new_provider = current["provider"] if provider is None else provider
     now = utc_now_iso()
 
     with connection() as db:
         db.execute(
             """
             UPDATE scheduler_config
-            SET enabled = ?, interval_minutes = ?, tags_json = ?, updated_at = ?
+            SET enabled = ?, interval_minutes = ?, tags_json = ?, provider = ?, updated_at = ?
             WHERE id = 1
             """,
             (
                 1 if new_enabled else 0,
                 new_interval,
                 json.dumps(new_tags, ensure_ascii=False),
+                new_provider,
                 now,
             ),
         )
