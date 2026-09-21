@@ -34,6 +34,8 @@ class Settings:
     fetch_interval_minutes: int = int(os.getenv("NEWS_CENTER_FETCH_INTERVAL_MINUTES", "30"))
     scheduler_autostart: bool = _get_bool("NEWS_CENTER_SCHEDULER_AUTOSTART", True)
     cleanup_days: int = int(os.getenv("NEWS_CENTER_CLEANUP_DAYS", "7"))
+    default_provider: str = os.getenv("NEWS_CENTER_DEFAULT_PROVIDER", "zaker").strip() or "zaker"
+    admin_api_key: str = os.getenv("NEWS_CENTER_ADMIN_API_KEY", "").strip()
     content_fetch_enabled: bool = _get_bool("NEWS_CENTER_CONTENT_FETCH_ENABLED", True)
     content_fetch_timeout_seconds: float = float(os.getenv("NEWS_CENTER_CONTENT_FETCH_TIMEOUT_SECONDS", "8.0"))
     content_fetch_concurrency: int = int(os.getenv("NEWS_CENTER_CONTENT_FETCH_CONCURRENCY", "4"))
