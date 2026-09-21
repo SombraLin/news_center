@@ -184,6 +184,23 @@ def test_fts_search_supports_chinese_source_and_tag_filter():
     assert tech_items[0]["tag"] == "tech"
 
 
+def test_short_search_term_falls_back_safely():
+    candidate = Candidate(
+        title="AI 芯片需求持续增长",
+        source="科技观察",
+        url="https://example.com/fts/short",
+        published_at=parse_publish_time("2026-09-21 10:35:00"),
+        summary="AI 芯片市场需求增长，产业链持续扩张。",
+        tag="tech",
+    )
+    insert_news_candidate(candidate)
+
+    items, total = search_news("AI")
+    assert total == 1
+    assert items[0]["title"] == "AI 芯片需求持续增长"
+    assert items[0]["relevance"] is None
+
+
 def test_news_keyword_query_uses_fts_index():
     candidate = Candidate(
         title="新能源汽车电池技术突破",
