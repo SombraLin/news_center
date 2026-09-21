@@ -6,6 +6,7 @@ from .fetch import router as fetch_router
 from .scheduler_route import router as scheduler_router
 from .health import router as health_router
 from .providers import router as providers_router
+from .podcast import router as podcast_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["健康检查"])
@@ -13,6 +14,7 @@ api_router.include_router(providers_router, tags=["Provider"])
 api_router.include_router(topics_router, tags=["主题列表"])
 api_router.include_router(news_router, tags=["新闻查询"])
 api_router.include_router(fetch_router, tags=["管理：按需抓取"])
+api_router.include_router(podcast_router, tags=["播客文案"])
 api_router.include_router(scheduler_router, tags=["管理：调度控制"])
 
 __all__ = ["api_router"]
